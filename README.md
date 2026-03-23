@@ -214,7 +214,7 @@ Parse XML input into a Python dictionary.
 - `cdata_separator=''`: Separator string to join multiple text nodes. This joins adjacent text nodes. For example, set to a space to avoid concatenation.
 - `postprocessor=None`: Function to modify parsed items.
 - `dict_constructor=dict`: Constructor for dictionaries (e.g., dict).
-- `strip_whitespace=True`: Remove leading/trailing whitespace in text nodes. Default is True; this trims whitespace in text nodes. Set to False to preserve whitespace exactly. When `process_comments=True`, this same flag also trims comment text; disable `strip_whitespace` if you need to preserve comment indentation or padding.
+- `strip_whitespace=True`: Remove leading/trailing whitespace in text nodes. Default is True; this trims whitespace in text nodes. Set to False to preserve whitespace exactly. When `process_comments=True`, this same flag also trims comment text; disable `strip_whitespace` if you need to preserve comment indentation or padding. If you preserve whitespace text nodes, avoid combining this with `unparse(..., pretty=True)`: the preserved text nodes and pretty-print indentation/newlines will both be emitted.
 - `namespaces=None`: Mapping of namespaces to prefixes, or None to keep full URIs.
 - `force_list=None`: Force list values for specific elements. Can be a boolean (True/False), a tuple of element names to force lists for, or a callable function that receives (path, key, value) and returns True/False. Useful for elements that may appear once or multiple times to ensure consistent list output.
 - `item_depth=0`: Depth at which to call `item_callback`.
@@ -233,8 +233,8 @@ Convert a Python dictionary back into XML.
 - `short_empty_elements=False`: Use short tags for empty elements (`<tag/>`).
 - `attr_prefix='@'`: Prefix for dictionary keys representing attributes.
 - `cdata_key='#text'`: Key for text content in the dictionary.
-- `pretty=False`: Pretty-print the XML output.
-- `indent='\t'`: Indentation string for pretty printing.
+- `pretty=False`: Pretty-print the XML output. This adds indentation/newlines for readability, so it should generally not be combined with parsed whitespace-preserving content when exact round-tripping matters.
+- `indent='\t'`: Indentation string for pretty printing. May also be an integer number of spaces.
 - `newl='\n'`: Newline character for pretty printing.
 - `expand_iter=None`: Tag name to use for items in nested lists (breaks roundtripping).
 
