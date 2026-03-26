@@ -27,6 +27,32 @@ fn intern_key(py: Python<'_>, cache: &mut KeyCache, key: &str) -> Py<PyString> {
     }
 }
 
+// ── value interning (size-capped) ─────────────────────────────────────────────
+
+/// Only short values can be cached (long strings are rarely repeated).
+const VALUE_LEN_MAX: usize = 32;
+/// Stop inserting new entries once the cache reaches this size.
+/// Cache hits still work after the cap — no correctness issue, just missed savings.
+const VALUE_CACHE_MAX: usize = 512;
+
+/// Try to return a cached PyString for `value`.  Returns None when the value is
+/// too long to be worth caching, or when the cache is full and `value` is new.
+/// The caller falls back to a fresh PyString::new in that case.
+fn try_intern_value(py: Python<'_>, cache: &mut KeyCache, value: &str) -> Option<Py<PyString>> {
+    if value.len() > VALUE_LEN_MAX {
+        return None;
+    }
+    if let Some(cached) = cache.get(value) {
+        return Some(cached.clone_ref(py));
+    }
+    if cache.len() >= VALUE_CACHE_MAX {
+        return None;
+    }
+    let py_str = PyString::new(py, value).unbind();
+    cache.insert(value.to_string(), py_str.clone_ref(py));
+    Some(py_str)
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn push_data(
@@ -85,6 +111,8 @@ fn build_attrs_dict(
     attr_prefix: &str,
     reader: &Reader<&[u8]>,
     key_cache: &mut KeyCache,
+    value_cache: &mut KeyCache,
+    intern_values: bool,
 ) -> PyResult<Option<Py<PyDict>>> {
     let decoder = reader.decoder();
     let mut dict: Option<Py<PyDict>> = None;
@@ -98,7 +126,16 @@ fn build_attrs_dict(
         let val = attr.decode_and_unescape_value(decoder).map_err(xml_error)?;
         let d = dict.get_or_insert_with(|| PyDict::new(py).unbind());
         let py_key = intern_key(py, key_cache, &full_key);
-        d.bind(py).set_item(py_key.bind(py), val.as_ref())?;
+        let val_py: PyObject = if intern_values {
+            if let Some(s) = try_intern_value(py, value_cache, val.as_ref()) {
+                s.into_bound(py).into()
+            } else {
+                PyString::new(py, val.as_ref()).into()
+            }
+        } else {
+            PyString::new(py, val.as_ref()).into()
+        };
+        d.bind(py).set_item(py_key.bind(py), val_py)?;
     }
 
     Ok(dict)
@@ -223,9 +260,16 @@ pub fn parse(
 
     // Per-call key cache: element names and attribute keys repeat across elements.
     let mut key_cache: KeyCache = HashMap::new();
+    // Per-call value cache: short, repeated values (e.g. enum-like attrs).
+    // Skipped in streaming mode: streamed items are discarded after each callback,
+    // so value reuse across elements is minimal and the cache itself would add
+    // ~30 KB of overhead (512 live PyStrings) that shows up in streaming benchmarks.
+    let mut value_cache: KeyCache = HashMap::new();
 
     // Streaming state
     let streaming = item_depth > 0;
+    // Only intern values in non-streaming mode where the full document lives in memory.
+    let intern_values = !streaming;
     let mut depth: usize = 0;
     // Path for streaming callbacks: (element_name, raw_attrs_or_None)
     let mut stream_path: Vec<(String, Option<Py<PyDict>>)> = Vec::new();
@@ -246,13 +290,13 @@ pub fn parse(
                         let raw = build_raw_attrs_dict(py, e.attributes(), &reader)?;
                         // Prefixed attrs for the item dict
                         let prefixed = if xml_attribs {
-                            build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?
+                            build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache, &mut value_cache, intern_values)?
                         } else {
                             None
                         };
                         (prefixed, raw)
                     } else if xml_attribs {
-                        (build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?, None)
+                        (build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache, &mut value_cache, intern_values)?, None)
                     } else {
                         // Consume attributes to avoid errors, but discard them
                         for attr in e.attributes() {
@@ -291,11 +335,27 @@ pub fn parse(
                 let value: Option<PyObject> = if let Some(ref d) = item {
                     if let Some(ref text) = data {
                         let ck = intern_key(py, &mut key_cache, cdata_key);
-                        d.bind(py).set_item(ck.bind(py), text)?;
+                        let text_py: PyObject = if intern_values {
+                            if let Some(s) = try_intern_value(py, &mut value_cache, text) {
+                                s.into_bound(py).into()
+                            } else {
+                                PyString::new(py, text).into()
+                            }
+                        } else {
+                            PyString::new(py, text).into()
+                        };
+                        d.bind(py).set_item(ck.bind(py), text_py)?;
                     }
                     Some(d.bind(py).clone().into())
                 } else {
-                    data.map(|s| PyString::new(py, &s).into())
+                    data.map(|s| {
+                        if intern_values {
+                            if let Some(py_str) = try_intern_value(py, &mut value_cache, &s) {
+                                return py_str.into_bound(py).into();
+                            }
+                        }
+                        PyString::new(py, &s).into()
+                    })
                 };
 
                 if streaming && depth == item_depth {
@@ -359,13 +419,13 @@ pub fn parse(
                     if streaming {
                         let raw = build_raw_attrs_dict(py, e.attributes(), &reader)?;
                         let prefixed = if xml_attribs {
-                            build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?
+                            build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache, &mut value_cache, intern_values)?
                         } else {
                             None
                         };
                         (prefixed, raw)
                     } else if xml_attribs {
-                        (build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?, None)
+                        (build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache, &mut value_cache, intern_values)?, None)
                     } else {
                         for attr in e.attributes() {
                             attr.map_err(xml_error)?;
