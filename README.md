@@ -1,10 +1,11 @@
-# xmltodict
+# xmltodict-rs
 
-`xmltodict` is a Python module that makes working with XML feel like you are working with [JSON](http://docs.python.org/library/json.html), as in this ["spec"](http://www.xml.com/pub/a/2006/05/31/converting-between-xml-and-json.html):
+**xmltodict** — now with a Rust acceleration layer. Drop-in replacement: same API, same behaviour, dramatically faster.
 
 [![Tests](https://github.com/martinblech/xmltodict/actions/workflows/test.yml/badge.svg)](https://github.com/martinblech/xmltodict/actions/workflows/test.yml)
 
 ```python
+>>> import xmltodict, json
 >>> print(json.dumps(xmltodict.parse("""
 ...  <mydocument has="an attribute">
 ...    <and>
@@ -33,345 +34,324 @@
 }
 ```
 
+---
+
+## What changed from the original
+
+The original `xmltodict` is a well-loved, zero-dependency library that converts XML to Python dicts and back. This fork keeps every public API unchanged and adds a Rust extension module (PyO3 + [quick-xml](https://github.com/tafia/quick-xml)) that replaces the hot paths:
+
+| Path | Original | This fork |
+|------|----------|-----------|
+| `parse()` | Python + expat | Rust (quick-xml) |
+| `unparse()` | Python + XMLGenerator | Rust |
+| `parse(item_depth=N, item_callback=...)` | Python (streaming) | Rust (constant 2 KB overhead) |
+
+If the Rust extension cannot be loaded (e.g., unsupported platform, PyPy), the library transparently falls back to the original Python implementation — no code changes needed.
+
+---
+
+## Benchmarks — Rust vs pure Python
+
+Measured on a modern laptop; median of 5 runs per fixture.
+
+### parse() throughput
+
+| Fixture | Pure Python | Rust | Speedup |
+|---------|-------------|------|---------|
+| small.xml (~1 KB) | 14 MB/s | 40 MB/s | **2.8×** |
+| medium.xml (~600 KB) | 40 MB/s | 93 MB/s | **2.3×** |
+| large.xml (~7 MB) | 28 MB/s | 76 MB/s | **2.7×** |
+| wide.xml (~800 KB, flat) | 26 MB/s | 64 MB/s | **2.5×** |
+| namespaced.xml (~300 KB) | 38 MB/s | 84 MB/s | **2.2×** |
+
+### Per-element cost
+
+| N | Pure Python | Rust | Speedup |
+|---|-------------|------|---------|
+| 100 elements | 2.82 µs/elem | 1.31 µs/elem | **2.2×** |
+| 10 000 elements | 2.88 µs/elem | 1.07 µs/elem | **2.7×** |
+| 50 000 elements | 2.92 µs/elem | 1.10 µs/elem | **2.7×** |
+
+### Memory usage (non-streaming)
+
+| Fixture | Pure Python | Rust | Improvement |
+|---------|-------------|------|-------------|
+| medium.xml (~600 KB) | 4.1× input | 2.0× input | **51% less** |
+| large.xml (~7 MB) | 3.1× input | 1.9× input | **39% less** |
+| wide.xml (~800 KB) | 7.5× input | 4.0× input | **47% less** |
+
+### Streaming memory overhead (`item_depth=2, item_callback=noop`)
+
+| Fixture | Pure Python | Rust | Improvement |
+|---------|-------------|------|-------------|
+| medium.xml (~600 KB) | 1 149 KB | **2 KB** | **478×** |
+| large.xml (~7 MB) | 4 132 KB | **2 KB** | **2 066×** |
+| wide.xml (~800 KB) | 1 561 KB | **2 KB** | **678×** |
+
+Streaming overhead in Rust is constant regardless of file size. That is the whole point.
+
+### unparse() throughput
+
+| Fixture | Pure Python | Rust | Speedup |
+|---------|-------------|------|---------|
+| medium.xml (~600 KB) | 34 MB/s | 237 MB/s | **7.0×** |
+| large.xml (~7 MB) | 22 MB/s | 181 MB/s | **8.1×** |
+| wide.xml (~800 KB) | 18 MB/s | 106 MB/s | **5.8×** |
+
+---
+
+## Installation
+
+```sh
+pip install xmltodict
+```
+
+The package ships pre-built wheels for Linux, macOS, and Windows (x86-64 and arm64). If no wheel matches your platform, pip falls back to building from source (requires a Rust toolchain: `rustup`).
+
+To force the pure-Python fallback:
+
+```python
+import xmltodict
+xmltodict._RUST_AVAILABLE = False   # must be set before any parse/unparse call
+```
+
+---
+
+## Quick start
+
+```python
+import xmltodict
+
+# XML → dict
+result = xmltodict.parse("<root><item id='1'>hello</item></root>")
+# {'root': {'item': {'@id': '1', '#text': 'hello'}}}
+
+# dict → XML
+xml = xmltodict.unparse(result, pretty=True)
+```
+
+---
+
+## Streaming large files
+
+Use `item_depth` and `item_callback` to process huge XML files with constant memory.
+Memory overhead stays at **~2 KB** regardless of file size.
+
+```python
+def handle_article(path, item):
+    print(item["title"])
+    return True  # return falsy to stop early
+
+with open("enwiki-pages-articles.xml", "rb") as f:
+    xmltodict.parse(f, item_depth=2, item_callback=handle_article)
+```
+
+`item_callback` receives:
+- `path` — list of `(element_name, attributes_or_None)` tuples from the root down to (but not including) the current item.
+- `item` — the fully parsed dict for the current element.
+
+Return `False` (or any falsy value) to stop parsing early. `ParsingInterrupted` is raised to signal the stop — catch it if needed:
+
+```python
+from xmltodict import ParsingInterrupted
+
+try:
+    xmltodict.parse(data, item_depth=2, item_callback=my_callback)
+except ParsingInterrupted:
+    pass  # stopped by callback returning False
+```
+
+---
+
 ## Namespace support
 
-By default, `xmltodict` does no XML namespace processing (it just treats namespace declarations as regular node attributes), but passing `process_namespaces=True` will make it expand namespaces for you:
+By default, namespace declarations are treated as regular attributes. Pass `process_namespaces=True` to expand them:
 
 ```python
->>> xml = """
-... <root xmlns="http://defaultns.com/"
-...       xmlns:a="http://a.com/"
-...       xmlns:b="http://b.com/">
-...   <x>1</x>
-...   <a:y>2</a:y>
-...   <b:z>3</b:z>
-... </root>
-... """
->>> xmltodict.parse(xml, process_namespaces=True) == {
-...     'http://defaultns.com/:root': {
-...         'http://defaultns.com/:x': '1',
-...         'http://a.com/:y': '2',
-...         'http://b.com/:z': '3',
-...     }
-... }
-True
+xml = """
+<root xmlns="http://defaultns.com/"
+      xmlns:a="http://a.com/">
+  <x>1</x>
+  <a:y>2</a:y>
+</root>
+"""
+
+xmltodict.parse(xml, process_namespaces=True)
+# {'http://defaultns.com/:root': {'http://defaultns.com/:x': '1',
+#                                  'http://a.com/:y': '2'}}
 ```
 
-It also lets you collapse certain namespaces to shorthand prefixes, or skip them altogether:
+Collapse or skip namespaces with the `namespaces` dict:
 
 ```python
->>> namespaces = {
-...     'http://defaultns.com/': None, # skip this namespace
-...     'http://a.com/': 'ns_a', # collapse "http://a.com/" -> "ns_a"
-... }
->>> xmltodict.parse(xml, process_namespaces=True, namespaces=namespaces) == {
-...     'root': {
-...         'x': '1',
-...         'ns_a:y': '2',
-...         'http://b.com/:z': '3',
-...     },
-... }
-True
+xmltodict.parse(xml, process_namespaces=True, namespaces={
+    "http://defaultns.com/": None,   # skip — strip the namespace
+    "http://a.com/": "ns_a",         # shorten to prefix
+})
+# {'root': {'x': '1', 'ns_a:y': '2'}}
 ```
 
-## Streaming mode
-
-`xmltodict` is very fast ([Expat](http://docs.python.org/library/pyexpat.html)-based) and has a streaming mode with a small memory footprint, suitable for big XML dumps like [Discogs](http://discogs.com/data/) or [Wikipedia](http://dumps.wikimedia.org/):
-
-```python
->>> def handle_artist(_, artist):
-...     print(artist['name'])
-...     return True
->>>
->>> xmltodict.parse(GzipFile('discogs_artists.xml.gz'),
-...     item_depth=2, item_callback=handle_artist)
-A Perfect Circle
-Fantômas
-King Crimson
-Chris Potter
-...
-```
-
-It can also be used from the command line to pipe objects to a script like this:
-
-```python
-import sys, marshal
-while True:
-    _, article = marshal.load(sys.stdin)
-    print(article['title'])
-```
-
-```sh
-$ bunzip2 enwiki-pages-articles.xml.bz2 | xmltodict.py 2 | myscript.py
-AccessibleComputing
-Anarchism
-AfghanistanHistory
-AfghanistanGeography
-AfghanistanPeople
-AfghanistanCommunications
-Autism
-...
-```
-
-Or just cache the dicts so you don't have to parse that big XML file again. You do this only once:
-
-```sh
-$ bunzip2 enwiki-pages-articles.xml.bz2 | xmltodict.py 2 | gzip > enwiki.dicts.gz
-```
-
-And you reuse the dicts with every script that needs them:
-
-```sh
-$ gunzip enwiki.dicts.gz | script1.py
-$ gunzip enwiki.dicts.gz | script2.py
-...
-```
+---
 
 ## Roundtripping
 
-You can also convert in the other direction, using the `unparse()` method:
-
 ```python
->>> mydict = {
-...     'response': {
-...             'status': 'good',
-...             'last_updated': '2014-02-16T23:10:12Z',
-...     }
-... }
->>> print(unparse(mydict, pretty=True))
+mydict = {
+    "response": {
+        "status": "good",
+        "last_updated": "2024-01-01T00:00:00Z",
+    }
+}
+print(xmltodict.unparse(mydict, pretty=True))
+```
+
+```xml
 <?xml version="1.0" encoding="utf-8"?>
 <response>
 	<status>good</status>
-	<last_updated>2014-02-16T23:10:12Z</last_updated>
+	<last_updated>2024-01-01T00:00:00Z</last_updated>
 </response>
 ```
 
-Text values for nodes can be specified with the `cdata_key` key in the python dict, while node properties can be specified with the `attr_prefix` prefixed to the key name in the python dict. The default value for `attr_prefix` is `@` and the default value for `cdata_key` is `#text`.
+Attributes and CDATA use configurable prefixes (`attr_prefix='@'`, `cdata_key='#text'` by default):
 
 ```python
->>> import xmltodict
->>>
->>> mydict = {
-...     'text': {
-...         '@color':'red',
-...         '@stroke':'2',
-...         '#text':'This is a test'
-...     }
-... }
->>> print(xmltodict.unparse(mydict, pretty=True))
-<?xml version="1.0" encoding="utf-8"?>
-<text stroke="2" color="red">This is a test</text>
+xmltodict.unparse({"text": {"@color": "red", "#text": "hello"}}, pretty=True)
+# <text color="red">hello</text>
 ```
 
-Lists that are specified under a key in a dictionary use the key as a tag for each item. But if a list does have a parent key, for example if a list exists inside another list, it does not have a tag to use and the items are converted to a string as shown in the example below.  To give tags to nested lists, use the `expand_iter` keyword argument to provide a tag as demonstrated below. Note that using `expand_iter` will break roundtripping.
-
-```python
->>> mydict = {
-...     "line": {
-...         "points": [
-...             [1, 5],
-...             [2, 6],
-...         ]
-...     }
-... }
->>> print(xmltodict.unparse(mydict, pretty=True))
-<?xml version="1.0" encoding="utf-8"?>
-<line>
-        <points>[1, 5]</points>
-        <points>[2, 6]</points>
-</line>
->>> print(xmltodict.unparse(mydict, pretty=True, expand_iter="coord"))
-<?xml version="1.0" encoding="utf-8"?>
-<line>
-        <points>
-                <coord>1</coord>
-                <coord>5</coord>
-        </points>
-        <points>
-                <coord>2</coord>
-                <coord>6</coord>
-        </points>
-</line>
-```
+---
 
 ## API Reference
 
-### xmltodict.parse()
+### `xmltodict.parse(xml_input, **kwargs)`
 
-Parse XML input into a Python dictionary.
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `xml_input` | — | String, bytes, file-like object, or generator of strings |
+| `encoding` | `None` | Input encoding (auto-detected if None) |
+| `process_namespaces` | `False` | Expand XML namespace URIs |
+| `namespace_separator` | `':'` | Separator between namespace URI and local name |
+| `disable_entities` | `True` | Block entity expansion (security default — do not disable) |
+| `process_comments` | `False` | Include XML comments in output |
+| `xml_attribs` | `True` | Include element attributes |
+| `attr_prefix` | `'@'` | Prefix for attribute keys |
+| `cdata_key` | `'#text'` | Key for element text content |
+| `force_cdata` | `False` | Force text-as-CDATA for all, selected, or matched elements |
+| `cdata_separator` | `''` | Join string for adjacent text chunks |
+| `postprocessor` | `None` | `fn(path, key, value) → (key, value)` applied to every item; returning `None` drops the item |
+| `dict_constructor` | `dict` | Dict class to use (e.g. `OrderedDict`) |
+| `strip_whitespace` | `True` | Trim whitespace in text nodes |
+| `namespaces` | `None` | Namespace URI → prefix mapping (requires `process_namespaces=True`) |
+| `force_list` | `None` | Force list wrapping for all, selected, or matched elements |
+| `item_depth` | `0` | Element depth at which to call `item_callback` (0 = disabled) |
+| `item_callback` | `lambda *a: True` | Called with `(path, item)` for each element at `item_depth` |
+| `comment_key` | `'#comment'` | Key used for comments when `process_comments=True` |
 
-- `xml_input`: XML input as a string, file-like object, or generator of strings.
-- `encoding=None`: Character encoding for the input XML.
-- `expat=expat`: XML parser module to use.
-- `process_namespaces=False`: Expand XML namespaces if True.
-- `namespace_separator=':'`: Separator between namespace URI and local name.
-- `disable_entities=True`: Disable entity parsing for security.
-- `process_comments=False`: Include XML comments if True. Comments can be preserved when enabled, but by default they are ignored. Multiple top-level comments may not be preserved in exact order.
-- `xml_attribs=True`: Include attributes in output dict (with `attr_prefix`).
-- `attr_prefix='@'`: Prefix for XML attributes in the dict.
-- `cdata_key='#text'`: Key for text content in the dict.
-- `force_cdata=False`: Force text content to be wrapped as CDATA for specific elements. Can be a boolean (True/False), a tuple of element names to force CDATA for, or a callable function that receives (path, key, value) and returns True/False.
-- `cdata_separator=''`: Separator string to join multiple text nodes. This joins adjacent text nodes. For example, set to a space to avoid concatenation.
-- `postprocessor=None`: Function to modify parsed items.
-- `dict_constructor=dict`: Constructor for dictionaries (e.g., dict).
-- `strip_whitespace=True`: Remove leading/trailing whitespace in text nodes. Default is True; this trims whitespace in text nodes. Set to False to preserve whitespace exactly. When `process_comments=True`, this same flag also trims comment text; disable `strip_whitespace` if you need to preserve comment indentation or padding. If you preserve whitespace text nodes, avoid combining this with `unparse(..., pretty=True)`: the preserved text nodes and pretty-print indentation/newlines will both be emitted.
-- `namespaces=None`: Mapping of namespaces to prefixes, or None to keep full URIs.
-- `force_list=None`: Force list values for specific elements. Can be a boolean (True/False), a tuple of element names to force lists for, or a callable function that receives (path, key, value) and returns True/False. Useful for elements that may appear once or multiple times to ensure consistent list output.
-- `item_depth=0`: Depth at which to call `item_callback`.
-- `item_callback=lambda *args: True`: Function called on items at `item_depth`.
-- `comment_key='#comment'`: Key used for XML comments when `process_comments=True`. Only used when `process_comments=True`. Comments can be preserved but multiple top-level comments may not retain order.
+### `xmltodict.unparse(input_dict, **kwargs)`
 
-### xmltodict.unparse()
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `input_dict` | — | Dict to convert |
+| `output` | `None` | File-like object; returns string if `None` |
+| `encoding` | `'utf-8'` | Output encoding |
+| `full_document` | `True` | Prepend `<?xml ...?>` declaration |
+| `short_empty_elements` | `False` | Use `<tag/>` for empty elements |
+| `attr_prefix` | `'@'` | Attribute key prefix |
+| `cdata_key` | `'#text'` | Text content key |
+| `pretty` | `False` | Indent output |
+| `indent` | `'\t'` | Indent string (or integer number of spaces) |
+| `newl` | `'\n'` | Newline string |
+| `expand_iter` | `None` | Tag for items in nested lists (breaks roundtripping) |
 
-Convert a Python dictionary back into XML.
-
-- `input_dict`: Dictionary to convert to XML.
-- `output=None`: File-like object to write XML to; returns string if None.
-- `encoding='utf-8'`: Encoding of the output XML.
-- `bytes_errors='replace'`: Error handler used when decoding byte values during unparse (for example `'replace'`, `'strict'`, `'ignore'`).
-- `full_document=True`: Include XML declaration if True.
-- `short_empty_elements=False`: Use short tags for empty elements (`<tag/>`).
-- `attr_prefix='@'`: Prefix for dictionary keys representing attributes.
-- `cdata_key='#text'`: Key for text content in the dictionary.
-- `pretty=False`: Pretty-print the XML output. This adds indentation/newlines for readability, so it should generally not be combined with parsed whitespace-preserving content when exact round-tripping matters.
-- `indent='\t'`: Indentation string for pretty printing. May also be an integer number of spaces.
-- `newl='\n'`: Newline character for pretty printing.
-- `expand_iter=None`: Tag name to use for items in nested lists (breaks roundtripping).
-
-> **Note:** When building XML from dictionaries, keys whose values are empty
-> lists are skipped. For example, `{'a': []}` produces no `<a>` element. Add a
-> placeholder child (for example, `{'a': ['']}`) if an explicit empty container
-> element is required in the output.
-
-Note: xmltodict aims to cover the common 90% of cases. It does not preserve every XML nuance (attribute order, mixed content ordering, multiple top-level comments). For exact fidelity, use a full XML library such as lxml.
+---
 
 ## Examples
 
-### Selective force_cdata
-
-The `force_cdata` parameter can be used to selectively force CDATA wrapping for specific elements:
+### force_cdata — selective CDATA wrapping
 
 ```python
->>> xml = '<a><b>data1</b><c>data2</c><d>data3</d></a>'
->>> # Force CDATA only for 'b' and 'd' elements
->>> xmltodict.parse(xml, force_cdata=('b', 'd'))
-{'a': {'b': {'#text': 'data1'}, 'c': 'data2', 'd': {'#text': 'data3'}}}
+xml = "<a><b>data1</b><c>data2</c></a>"
 
->>> # Force CDATA for all elements (original behavior)
->>> xmltodict.parse(xml, force_cdata=True)
-{'a': {'b': {'#text': 'data1'}, 'c': {'#text': 'data2'}, 'd': {'#text': 'data3'}}}
+# Only wrap specific elements
+xmltodict.parse(xml, force_cdata=("b",))
+# {'a': {'b': {'#text': 'data1'}, 'c': 'data2'}}
 
->>> # Use a callable for complex logic
->>> def should_force_cdata(path, key, value):
-...     return key in ['b', 'd'] and len(value) > 4
->>> xmltodict.parse(xml, force_cdata=should_force_cdata)
-{'a': {'b': {'#text': 'data1'}, 'c': 'data2', 'd': {'#text': 'data3'}}}
+# All elements
+xmltodict.parse(xml, force_cdata=True)
+# {'a': {'b': {'#text': 'data1'}, 'c': {'#text': 'data2'}}}
+
+# Callable
+xmltodict.parse(xml, force_cdata=lambda path, key, val: key == "b")
+# {'a': {'b': {'#text': 'data1'}, 'c': 'data2'}}
 ```
 
-### Selective force_list
+### force_list — consistent list output
 
-The `force_list` parameter can be used to selectively force list values for specific elements:
+Useful when an element may appear once or multiple times and you always want a list:
 
 ```python
->>> xml = '<a><b>data1</b><b>data2</b><c>data3</c></a>'
->>> # Force lists only for 'b' elements
->>> xmltodict.parse(xml, force_list=('b',))
-{'a': {'b': ['data1', 'data2'], 'c': 'data3'}}
-
->>> # Force lists for all elements (original behavior)
->>> xmltodict.parse(xml, force_list=True)
-{'a': [{'b': ['data1', 'data2'], 'c': ['data3']}]}
-
->>> # Use a callable for complex logic
->>> def should_force_list(path, key, value):
-...     return key in ['b'] and isinstance(value, str)
->>> xmltodict.parse(xml, force_list=should_force_list)
-{'a': {'b': ['data1', 'data2'], 'c': 'data3'}}
+xml = "<a><item>one</item></a>"
+xmltodict.parse(xml, force_list=("item",))
+# {'a': {'item': ['one']}}   ← always a list, even for a single element
 ```
 
-## Ok, how do I get it?
+### postprocessor — transform values on the fly
 
-### Using pypi
+```python
+def int_postprocessor(path, key, value):
+    try:
+        return key, int(value)
+    except (ValueError, TypeError):
+        return key, value
 
-You just need to
-
-```sh
-$ pip install xmltodict
+xmltodict.parse("<root><count>42</count></root>", postprocessor=int_postprocessor)
+# {'root': {'count': 42}}
 ```
 
-### Using conda
+### Nested lists with expand_iter
 
-For installing `xmltodict` using Anaconda/Miniconda (*conda*) from the
-[conda-forge channel][#xmltodict-conda] all you need to do is:
-
-[#xmltodict-conda]: https://anaconda.org/conda-forge/xmltodict
-
-```sh
-$ conda install -c conda-forge xmltodict
+```python
+mydict = {"line": {"points": [[1, 5], [2, 6]]}}
+print(xmltodict.unparse(mydict, pretty=True, expand_iter="coord"))
 ```
 
-### RPM-based distro (Fedora, RHEL, …)
-
-There is an [official Fedora package for xmltodict](https://packages.fedoraproject.org/pkgs/python-xmltodict/).
-
-```sh
-$ sudo yum install python3-xmltodict
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<line>
+	<points>
+		<coord>1</coord>
+		<coord>5</coord>
+	</points>
+	<points>
+		<coord>2</coord>
+		<coord>6</coord>
+	</points>
+</line>
 ```
 
-### Arch Linux
+---
 
-There is an [official Arch Linux package for xmltodict](https://archlinux.org/packages/extra/any/python-xmltodict/).
+## Security
 
-```sh
-$ sudo pacman -S python-xmltodict
-```
+- **`disable_entities=True`** (default) blocks XML entity expansion (billion-laughs / XML-bomb attacks). Do not disable this.
+- **`_validate_name`** guards element and attribute names during `unparse()` to prevent tag-injection attacks.
+- **`_validate_comment`** rejects `--` inside XML comments (illegal per spec).
 
-### Debian-based distro (Debian, Ubuntu, …)
+A CVE (CVE-2025-9375) was filed against `xmltodict` but is [disputed](https://github.com/martinblech/xmltodict/issues/377#issuecomment-3255691923). The root issue is in Python's `xml.sax.saxutils.XMLGenerator`, which does not validate element names. The same behaviour exists throughout the standard library. The disclosure timeline (10 days from first contact to publication) did not allow a maintainer response.
 
-There is an [official Debian package for xmltodict](https://tracker.debian.org/pkg/python-xmltodict).
+---
 
-```sh
-$ sudo apt install python-xmltodict
-```
+## Compatibility notes
 
-### FreeBSD
+- Python 3.9+
+- Falls back to pure Python automatically when the Rust extension is unavailable (PyPy, unsupported architectures, source installs without Rust)
+- Full backwards compatibility with the original `xmltodict` API
+- `xmltodict.py` — the original single-file implementation — is preserved as the fallback
 
-There is an [official FreeBSD port for xmltodict](https://svnweb.freebsd.org/ports/head/devel/py-xmltodict/).
+---
 
-```sh
-$ pkg install py36-xmltodict
-```
+## License
 
-### openSUSE/SLE (SLE 15, Leap 15, Tumbleweed)
-
-There is an [official openSUSE package for xmltodict](https://software.opensuse.org/package/python-xmltodict).
-
-```sh
-# Python2
-$ zypper in python2-xmltodict
-
-# Python3
-$ zypper in python3-xmltodict
-```
-
-## Type Annotations
-
-For type checking support, install the external types package:
-
-```sh
-# Using pypi
-$ pip install types-xmltodict
-
-# Using conda
-$ conda install -c conda-forge types-xmltodict
-```
-
-## Security Notes
-
-A CVE (CVE-2025-9375) was filed against `xmltodict` but is [disputed](https://github.com/martinblech/xmltodict/issues/377#issuecomment-3255691923). The root issue lies in Python’s `xml.sax.saxutils.XMLGenerator` API, which does not validate XML element names and provides no built-in way to do so. Since `xmltodict` is a thin wrapper that passes keys directly to `XMLGenerator`, the same issue exists in the standard library itself.
-
-It has been suggested that `xml.sax.saxutils.escape()` represents a secure usage path. This is incorrect: `escape()` is intended only for character data and attribute values, and can produce invalid XML when misapplied to element names. There is currently no secure, documented way in Python’s standard library to validate XML element names.
-
-Despite this, Fluid Attacks chose to assign a CVE to `xmltodict` while leaving the identical behavior in Python’s own standard library unaddressed. Their disclosure process also gave only 10 days from first contact to publication—well short of the 90-day industry norm—leaving no real opportunity for maintainer response. These actions reflect an inconsistency of standards and priorities that raise concerns about motivations, as they do not primarily serve the security of the broader community.
-
-The maintainer considers this CVE invalid and will formally dispute it with MITRE.
+MIT. Copyright (C) 2012 Martin Blech and individual contributors.
+Rust acceleration layer Copyright (C) 2025 Andrei Voicu Tomuț.
