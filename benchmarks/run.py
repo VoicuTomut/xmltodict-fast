@@ -364,12 +364,22 @@ def main():
         metavar="FILE",
         help="Save results to a JSON file (e.g. benchmarks/results/baseline.json)",
     )
+    parser.add_argument(
+        "--python-only",
+        action="store_true",
+        help="Force the pure-Python path (disable Rust extension) for baseline measurement",
+    )
     args = parser.parse_args()
+
+    if args.python_only:
+        xmltodict._RUST_AVAILABLE = False
+        xmltodict._BACKEND = "python"
 
     print()
     print("  xmltodict benchmark suite")
     print(f"  xmltodict version: {getattr(xmltodict, '__version__', 'unknown')}")
     print(f"  Python: {sys.version.split()[0]}")
+    print(f"  Backend: {'python (forced)' if getattr(args, 'python_only', False) else xmltodict._BACKEND}")
     print(f"  Repeats per measurement: {REPEATS} (median reported)")
     print()
 

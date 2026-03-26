@@ -2,77 +2,77 @@
   "parse_throughput": {
     "small.xml": {
       "size_mb": 0.0,
-      "throughput_mbs": 14.23
+      "throughput_mbs": 39.71
     },
     "medium.xml": {
       "size_mb": 0.594,
-      "throughput_mbs": 40.14
+      "throughput_mbs": 92.59
     },
     "large.xml": {
       "size_mb": 6.925,
-      "throughput_mbs": 27.73
+      "throughput_mbs": 76.07
     },
     "wide.xml": {
       "size_mb": 0.808,
-      "throughput_mbs": 26.12
+      "throughput_mbs": 63.97
     },
     "deep.xml": {
       "size_mb": 0.493,
-      "throughput_mbs": 477.53
+      "throughput_mbs": 179.73
     },
     "namespaced.xml": {
       "size_mb": 0.301,
-      "throughput_mbs": 38.35
+      "throughput_mbs": 84.39
     }
   },
   "per_element_us": {
-    "100": 2.8167,
-    "1000": 2.8454,
-    "5000": 2.8732,
-    "10000": 2.8791,
-    "50000": 2.9215
+    "100": 1.3138,
+    "1000": 1.0893,
+    "5000": 1.067,
+    "10000": 1.0666,
+    "50000": 1.095
   },
   "memory_ratio": {
     "medium.xml_non_streaming": {
       "size_mb": 0.594,
-      "peak_mb": 2.431,
-      "ratio": 4.1
+      "peak_mb": 1.195,
+      "ratio": 2.01
     },
     "large.xml_non_streaming": {
       "size_mb": 6.925,
-      "peak_mb": 21.479,
-      "ratio": 3.1
+      "peak_mb": 13.167,
+      "ratio": 1.9
     },
     "wide.xml_non_streaming": {
       "size_mb": 0.808,
-      "peak_mb": 6.064,
-      "ratio": 7.51
+      "peak_mb": 3.206,
+      "ratio": 3.97
     },
     "medium.xml_streaming": {
       "size_mb": 0.594,
-      "overhead_kb": 1148.9
+      "overhead_kb": 2.4
     },
     "large.xml_streaming": {
       "size_mb": 6.925,
-      "overhead_kb": 4132.1
+      "overhead_kb": 2.0
     },
     "wide.xml_streaming": {
       "size_mb": 0.808,
-      "overhead_kb": 1560.7
+      "overhead_kb": 2.3
     }
   },
   "unparse_throughput": {
     "medium.xml": {
       "output_mb": 0.525,
-      "throughput_mbs": 33.87
+      "throughput_mbs": 237.49
     },
     "large.xml": {
       "output_mb": 5.743,
-      "throughput_mbs": 22.37
+      "throughput_mbs": 181.07
     },
     "wide.xml": {
       "output_mb": 0.779,
-      "throughput_mbs": 18.18
+      "throughput_mbs": 106.21
     }
   }
 }

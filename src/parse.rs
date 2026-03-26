@@ -251,7 +251,13 @@ pub fn parse(
     }
 
     let mut reader = Reader::from_reader(xml_bytes.as_slice());
-    reader.config_mut().trim_text(false); // we strip ourselves
+    // When strip_whitespace is enabled, let quick-xml trim each text chunk and
+    // suppress empty-after-trim text events entirely.  This avoids generating
+    // Event::Text at all for pure-whitespace content (e.g. the 97% whitespace
+    // indentation in deep.xml), which is much cheaper than allocating and
+    // discarding strings ourselves.  When strip_whitespace is false we still
+    // need every byte, so we fall back to no trimming.
+    reader.config_mut().trim_text(strip_whitespace);
 
     let mut stack: Vec<Frame> = Vec::new();
     // Track completed root elements so we can raise on multiple roots.
@@ -397,7 +403,12 @@ pub fn parse(
             Event::Text(e) => {
                 let text = e.unescape().map_err(xml_error)?;
                 if let Some(frame) = stack.last_mut() {
-                    frame.data.push(text.into_owned());
+                    // quick-xml already suppresses empty-after-trim text events when
+                    // trim_text(true) is set (strip_whitespace mode), so most whitespace
+                    // never reaches here.  Push any remaining non-empty chunk.
+                    if !text.is_empty() {
+                        frame.data.push(text.into_owned());
+                    }
                 }
             }
 
