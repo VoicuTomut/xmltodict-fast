@@ -89,7 +89,7 @@ fn py_to_str(py: Python<'_>, v: &Bound<'_, PyAny>) -> PyResult<String> {
         return Ok(if b { "true".to_string() } else { "false".to_string() });
     }
     if let Ok(s) = v.downcast::<PyString>() {
-        return Ok(s.to_str()?.to_string());
+        return Ok(s.to_string_lossy().into_owned());
     }
     if let Ok(b) = v.downcast::<PyBytes>() {
         return Ok(String::from_utf8_lossy(b.as_bytes()).into_owned());
@@ -105,7 +105,7 @@ fn py_to_str(py: Python<'_>, v: &Bound<'_, PyAny>) -> PyResult<String> {
     }
     // fall through: call Python str()
     let _ = py;
-    Ok(v.str()?.to_str()?.to_string())
+    Ok(v.str()?.to_string_lossy().into_owned())
 }
 
 // ── options ───────────────────────────────────────────────────────────────────
@@ -181,10 +181,10 @@ fn process_dict(
     for (dk, dv) in d.iter() {
         // Key → string
         let dk_str: String = if let Ok(s) = dk.downcast::<PyString>() {
-            s.to_str()?.to_string()
+            s.to_string_lossy().into_owned()
         } else {
             // Non-string key: convert via str(), then validate (may raise ValueError)
-            dk.str()?.to_str()?.to_string()
+            dk.str()?.to_string_lossy().into_owned()
         };
 
         // cdata_key ('#text')
@@ -203,7 +203,7 @@ fn process_dict(
             if attr_name == "xmlns" && dv.is_instance_of::<PyDict>() {
                 let xmlns_dict = dv.downcast::<PyDict>()?;
                 for (k, v) in xmlns_dict.iter() {
-                    let prefix = k.str()?.to_str()?.to_string();
+                    let prefix = k.str()?.to_string_lossy().into_owned();
                     validate_name(&prefix, "attribute")?;
                     let attr = if prefix.is_empty() {
                         "xmlns".to_string()
@@ -260,7 +260,7 @@ fn emit_single_value(
     } else if let Ok(d) = v.downcast::<PyDict>() {
         process_dict(py, d, opts, &mut cdata, &mut attrs, &mut children)?;
     } else if let Ok(s) = v.downcast::<PyString>() {
-        cdata = Some(s.to_str()?.to_string());
+        cdata = Some(s.to_string_lossy().into_owned());
     } else {
         // Non-string scalar (int, float, bool, bytes, …) → convert to string → cdata
         cdata = Some(py_to_str(py, v)?);
@@ -448,9 +448,9 @@ pub fn unparse(
 
     for (key, value) in input_dict.iter() {
         let key_str: String = if let Ok(s) = key.downcast::<PyString>() {
-            s.to_str()?.to_string()
+            s.to_string_lossy().into_owned()
         } else {
-            key.str()?.to_str()?.to_string()
+            key.str()?.to_string_lossy().into_owned()
         };
 
         if key_str != comment_key && full_document && seen_root {

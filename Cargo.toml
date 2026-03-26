@@ -8,5 +8,5 @@ name = "_xmltodict_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3      = { version = "0.23", features = ["extension-module"] }
+pyo3      = { version = "0.23", features = ["extension-module", "abi3-py39"] }
 quick-xml = { version = "0.37", features = ["encoding"] }

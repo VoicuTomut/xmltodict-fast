@@ -236,7 +236,7 @@ pub fn parse(
     let xml_bytes: Vec<u8> = if let Ok(b) = xml_input.extract::<Vec<u8>>() {
         b
     } else if let Ok(s) = xml_input.downcast::<PyString>() {
-        s.to_str()?.as_bytes().to_vec()
+        s.to_string_lossy().into_owned().into_bytes()
     } else {
         return Err(pyo3::exceptions::PyTypeError::new_err(
             "xml_input must be str or bytes",
