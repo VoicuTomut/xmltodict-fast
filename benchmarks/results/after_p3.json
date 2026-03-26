@@ -2,35 +2,35 @@
   "parse_throughput": {
     "small.xml": {
       "size_mb": 0.0,
-      "throughput_mbs": 47.59
+      "throughput_mbs": 36.57
     },
     "medium.xml": {
       "size_mb": 0.594,
-      "throughput_mbs": 74.56
+      "throughput_mbs": 79.62
     },
     "large.xml": {
       "size_mb": 6.925,
-      "throughput_mbs": 59.35
+      "throughput_mbs": 62.36
     },
     "wide.xml": {
       "size_mb": 0.808,
-      "throughput_mbs": 61.1
+      "throughput_mbs": 62.46
     },
     "deep.xml": {
       "size_mb": 0.493,
-      "throughput_mbs": 164.53
+      "throughput_mbs": 174.48
     },
     "namespaced.xml": {
       "size_mb": 0.301,
-      "throughput_mbs": 71.55
+      "throughput_mbs": 77.43
     }
   },
   "per_element_us": {
-    "100": 1.2033,
-    "1000": 1.089,
-    "5000": 1.1241,
-    "10000": 1.1095,
-    "50000": 1.1693
+    "100": 1.1242,
+    "1000": 1.0253,
+    "5000": 1.092,
+    "10000": 1.0712,
+    "50000": 1.1386
   },
   "memory_ratio": {
     "medium.xml_non_streaming": {
@@ -64,15 +64,15 @@
   "unparse_throughput": {
     "medium.xml": {
       "output_mb": 0.525,
-      "throughput_mbs": 243.09
+      "throughput_mbs": 253.89
     },
     "large.xml": {
       "output_mb": 5.743,
-      "throughput_mbs": 173.74
+      "throughput_mbs": 182.85
     },
     "wide.xml": {
       "output_mb": 0.779,
-      "throughput_mbs": 105.67
+      "throughput_mbs": 112.47
     }
   }
 }
