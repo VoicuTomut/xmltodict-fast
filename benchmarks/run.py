@@ -228,11 +228,16 @@ def bench_memory():
 
     print()
 
-    # Streaming — overhead should stay constant regardless of file size
+    # Streaming — overhead should stay constant regardless of file size.
+    # tracemalloc only sees CPython-managed allocations that happen *during*
+    # parse(); `data` was allocated before .start() and is never counted.
+    # We just report the raw peak: if streaming is correct it stays roughly
+    # the same across small, medium and large files.
     print("  Streaming (item_depth=2, no-op callback):")
     def _noop(path, item):
         return True
 
+    stream_rows = []
     for filename, size_label in fixtures:
         data = _load(filename)
         size_bytes = len(data)
@@ -244,20 +249,27 @@ def bench_memory():
         tracemalloc.stop()
 
         size_mb = size_bytes / (1024 * 1024)
-        # Overhead = peak minus the input bytes already in memory.
-        # Should stay small and constant regardless of file size.
-        overhead_kb = max(0, peak - size_bytes) / 1024
-        note = "LEAK — overhead grows with file size" if overhead_kb > 3000 else "constant ✓"
+        overhead_kb = peak / 1024
+        stream_rows.append((filename, size_label, size_mb, overhead_kb))
+        results[f"{filename}_streaming"] = {
+            "size_mb": round(size_mb, 3),
+            "overhead_kb": round(overhead_kb, 1),
+        }
+
+    # A leak shows up as overhead scaling with file size.
+    # Flag if largest file uses >5× the overhead of the smallest file.
+    overheads = [r[3] for r in stream_rows]
+    ratio = max(overheads) / max(min(overheads), 1)
+    leak = ratio > 5
+
+    for filename, size_label, size_mb, overhead_kb in stream_rows:
+        note = "LEAK — overhead grows with file size" if leak else "constant ✓"
         _row(
             f"  {filename}  ({size_label})",
             f"{overhead_kb:.0f}",
             "KB overhead",
             note,
         )
-        results[f"{filename}_streaming"] = {
-            "size_mb": round(size_mb, 3),
-            "overhead_kb": round(overhead_kb, 1),
-        }
 
     print()
     return results
