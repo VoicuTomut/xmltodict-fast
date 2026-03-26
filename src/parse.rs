@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyString};
+use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
@@ -104,6 +104,48 @@ fn build_attrs_dict(
     Ok(dict)
 }
 
+/// Build an unprefixed attrs dict for the streaming path: keys are raw XML
+/// attribute names (no attr_prefix applied), matching the Python SAX handler
+/// which stores raw attrs in self.path before applying any prefix.
+fn build_raw_attrs_dict(
+    py: Python<'_>,
+    attributes: quick_xml::events::attributes::Attributes<'_>,
+    reader: &Reader<&[u8]>,
+) -> PyResult<Option<Py<PyDict>>> {
+    let decoder = reader.decoder();
+    let mut dict: Option<Py<PyDict>> = None;
+
+    for attr in attributes {
+        let attr = attr.map_err(xml_error)?;
+        let key_str = std::str::from_utf8(attr.key.as_ref())
+            .map_err(|_| xml_error("invalid UTF-8 in attribute name"))?;
+        let val = attr.decode_and_unescape_value(decoder).map_err(xml_error)?;
+        let d = dict.get_or_insert_with(|| PyDict::new(py).unbind());
+        d.bind(py).set_item(key_str, val.as_ref())?;
+    }
+
+    Ok(dict)
+}
+
+/// Build the Python list passed to item_callback: [(name, attrs_or_None), ...]
+/// Mirrors the self.path list in Python's _DictSAXHandler.
+fn build_callback_path(
+    py: Python<'_>,
+    path: &[(String, Option<Py<PyDict>>)],
+) -> PyResult<Py<PyList>> {
+    let list = PyList::empty(py);
+    for (name, raw_attrs) in path {
+        let name_obj = PyString::new(py, name);
+        let attrs_obj: Bound<'_, PyAny> = match raw_attrs {
+            Some(d) => d.bind(py).clone().into_any(),
+            None => py.None().into_bound(py),
+        };
+        let tup = PyTuple::new(py, [name_obj.into_any(), attrs_obj])?;
+        list.append(tup)?;
+    }
+    Ok(list.unbind())
+}
+
 fn decode_name(bytes: &[u8]) -> PyResult<String> {
     std::str::from_utf8(bytes)
         .map(|s| s.to_string())
@@ -136,6 +178,8 @@ fn join_data(parts: Vec<String>, sep: &str, strip: bool) -> Option<String> {
     strip_whitespace = true,
     force_list = None,
     disable_entities = true,
+    item_depth = 0,
+    item_callback = None,
 ))]
 pub fn parse(
     py: Python<'_>,
@@ -148,6 +192,8 @@ pub fn parse(
     strip_whitespace: bool,
     force_list: Option<Vec<String>>,
     disable_entities: bool,
+    item_depth: usize,
+    item_callback: Option<Py<PyAny>>,
 ) -> PyResult<PyObject> {
     // Accept bytes / bytearray / str
     let xml_bytes: Vec<u8> = if let Ok(b) = xml_input.extract::<Vec<u8>>() {
@@ -178,6 +224,12 @@ pub fn parse(
     // Per-call key cache: element names and attribute keys repeat across elements.
     let mut key_cache: KeyCache = HashMap::new();
 
+    // Streaming state
+    let streaming = item_depth > 0;
+    let mut depth: usize = 0;
+    // Path for streaming callbacks: (element_name, raw_attrs_or_None)
+    let mut stream_path: Vec<(String, Option<Py<PyDict>>)> = Vec::new();
+
     loop {
         let event = reader.read_event().map_err(xml_error)?;
 
@@ -185,15 +237,34 @@ pub fn parse(
             Event::Start(ref e) => {
                 let name = decode_name(e.name().as_ref())?;
 
-                let item: Option<Py<PyDict>> = if xml_attribs {
-                    build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?
-                } else {
-                    // consume attributes to avoid errors
-                    for attr in e.attributes() {
-                        attr.map_err(xml_error)?;
-                    }
-                    None
-                };
+                // When streaming: build raw (unprefixed) attrs for the path entry,
+                // then build prefixed attrs for the item dict.
+                // When not streaming: build only prefixed attrs (or nothing).
+                let (item, path_raw_attrs): (Option<Py<PyDict>>, Option<Py<PyDict>>) =
+                    if streaming {
+                        // Raw attrs (no prefix) for path — always built when streaming
+                        let raw = build_raw_attrs_dict(py, e.attributes(), &reader)?;
+                        // Prefixed attrs for the item dict
+                        let prefixed = if xml_attribs {
+                            build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?
+                        } else {
+                            None
+                        };
+                        (prefixed, raw)
+                    } else if xml_attribs {
+                        (build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?, None)
+                    } else {
+                        // Consume attributes to avoid errors, but discard them
+                        for attr in e.attributes() {
+                            attr.map_err(xml_error)?;
+                        }
+                        (None, None)
+                    };
+
+                if streaming {
+                    stream_path.push((name.clone(), path_raw_attrs));
+                    depth += 1;
+                }
 
                 stack.push(Frame {
                     name,
@@ -227,20 +298,39 @@ pub fn parse(
                     data.map(|s| PyString::new(py, &s).into())
                 };
 
-                if let Some(parent) = stack.last_mut() {
-                    let parent_item = parent.item.take();
-                    let new_item =
-                        push_data(py, parent_item, &name, value, &force_list, &mut key_cache)?;
-                    parent.item = Some(new_item);
-                } else {
-                    // Root element closed
-                    root_count += 1;
-                    if root_count > 1 {
-                        return Err(xml_error("junk after document element"));
+                if streaming && depth == item_depth {
+                    // Fire the streaming callback instead of attaching to parent
+                    let path_list = build_callback_path(py, &stream_path)?;
+                    if let Some(ref cb) = item_callback {
+                        let item_val: PyObject = value.unwrap_or_else(|| py.None());
+                        let result = cb.bind(py).call1((path_list, item_val))?;
+                        if !result.is_truthy()? {
+                            return Err(crate::ParsingInterrupted::new_err(""));
+                        }
                     }
-                    let d = PyDict::new(py);
-                    d.set_item(&name, value.unwrap_or_else(|| py.None()))?;
-                    root_item = Some(d.unbind());
+                    stream_path.pop();
+                    depth -= 1;
+                    // Don't attach to parent — the item has been consumed by the callback
+                } else {
+                    if let Some(parent) = stack.last_mut() {
+                        let parent_item = parent.item.take();
+                        let new_item =
+                            push_data(py, parent_item, &name, value, &force_list, &mut key_cache)?;
+                        parent.item = Some(new_item);
+                    } else {
+                        // Root element closed (not at streaming depth)
+                        root_count += 1;
+                        if root_count > 1 {
+                            return Err(xml_error("junk after document element"));
+                        }
+                        let d = PyDict::new(py);
+                        d.set_item(&name, value.unwrap_or_else(|| py.None()))?;
+                        root_item = Some(d.unbind());
+                    }
+                    if streaming {
+                        stream_path.pop();
+                        depth -= 1;
+                    }
                 }
             }
 
@@ -262,31 +352,58 @@ pub fn parse(
 
             Event::Empty(ref e) => {
                 let name = decode_name(e.name().as_ref())?;
+                // An empty element is conceptually at depth+1 relative to current depth
+                let effective_depth = depth + 1;
 
-                let item: Option<Py<PyDict>> = if xml_attribs {
-                    build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?
-                } else {
-                    for attr in e.attributes() {
-                        attr.map_err(xml_error)?;
-                    }
-                    None
-                };
+                let (item, path_raw_attrs): (Option<Py<PyDict>>, Option<Py<PyDict>>) =
+                    if streaming {
+                        let raw = build_raw_attrs_dict(py, e.attributes(), &reader)?;
+                        let prefixed = if xml_attribs {
+                            build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?
+                        } else {
+                            None
+                        };
+                        (prefixed, raw)
+                    } else if xml_attribs {
+                        (build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?, None)
+                    } else {
+                        for attr in e.attributes() {
+                            attr.map_err(xml_error)?;
+                        }
+                        (None, None)
+                    };
 
                 let value: Option<PyObject> = item.map(|d| d.bind(py).clone().into());
 
-                if let Some(parent) = stack.last_mut() {
-                    let parent_item = parent.item.take();
-                    let new_item =
-                        push_data(py, parent_item, &name, value, &force_list, &mut key_cache)?;
-                    parent.item = Some(new_item);
-                } else {
-                    root_count += 1;
-                    if root_count > 1 {
-                        return Err(xml_error("junk after document element"));
+                if streaming && effective_depth == item_depth {
+                    // Temporarily push to path, fire callback, then pop
+                    stream_path.push((name.clone(), path_raw_attrs));
+                    let path_list = build_callback_path(py, &stream_path)?;
+                    stream_path.pop();
+
+                    if let Some(ref cb) = item_callback {
+                        let item_val: PyObject = value.unwrap_or_else(|| py.None());
+                        let result = cb.bind(py).call1((path_list, item_val))?;
+                        if !result.is_truthy()? {
+                            return Err(crate::ParsingInterrupted::new_err(""));
+                        }
                     }
-                    let d = PyDict::new(py);
-                    d.set_item(&name, value.unwrap_or_else(|| py.None()))?;
-                    root_item = Some(d.unbind());
+                    // Don't attach to parent
+                } else {
+                    if let Some(parent) = stack.last_mut() {
+                        let parent_item = parent.item.take();
+                        let new_item =
+                            push_data(py, parent_item, &name, value, &force_list, &mut key_cache)?;
+                        parent.item = Some(new_item);
+                    } else {
+                        root_count += 1;
+                        if root_count > 1 {
+                            return Err(xml_error("junk after document element"));
+                        }
+                        let d = PyDict::new(py);
+                        d.set_item(&name, value.unwrap_or_else(|| py.None()))?;
+                        root_item = Some(d.unbind());
+                    }
                 }
             }
 
@@ -312,6 +429,11 @@ pub fn parse(
     // Unclosed tags = malformed document
     if !stack.is_empty() {
         return Err(xml_error("unclosed tag"));
+    }
+
+    // Streaming mode always returns None
+    if streaming {
+        return Ok(py.None());
     }
 
     // Empty document (no root element)

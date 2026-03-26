@@ -1,12 +1,14 @@
 import re
 
 try:
-    from ._xmltodict_rs import parse as _rs_parse, unparse as _rs_unparse
+    from ._xmltodict_rs import parse as _rs_parse, unparse as _rs_unparse, ParsingInterrupted
     _RUST_AVAILABLE = True
 except ImportError:
     _RUST_AVAILABLE = False
 
-from ._pure import parse as _py_parse, unparse as _py_unparse, ParsingInterrupted
+from ._pure import parse as _py_parse, unparse as _py_unparse
+if not _RUST_AVAILABLE:
+    from ._pure import ParsingInterrupted
 
 _BACKEND = "rust" if _RUST_AVAILABLE else "python"
 
@@ -32,8 +34,6 @@ def _use_rust_parse(xml_input, kwargs: dict) -> bool:
     if kwargs.get("process_namespaces", False):
         return False
     if kwargs.get("process_comments", False):
-        return False
-    if kwargs.get("item_depth", 0) != 0:
         return False
     if kwargs.get("disable_entities", True) is False:
         return False
@@ -76,7 +76,7 @@ def parse(xml_input, encoding=None, expat=None, process_namespaces=False,
 
         rust_kwargs = {}
         for k in ("xml_attribs", "attr_prefix", "cdata_key", "force_cdata",
-                  "cdata_separator", "strip_whitespace"):
+                  "cdata_separator", "strip_whitespace", "item_depth", "item_callback"):
             if k in kwargs:
                 rust_kwargs[k] = kwargs[k]
         fl = kwargs.get("force_list", None)

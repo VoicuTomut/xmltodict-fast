@@ -8,8 +8,11 @@ from io import StringIO
 from inspect import isgenerator
 import codecs
 
-class ParsingInterrupted(Exception):
-    pass
+try:
+    from ._xmltodict_rs import ParsingInterrupted
+except ImportError:
+    class ParsingInterrupted(Exception):
+        pass
 
 
 class _DictSAXHandler:

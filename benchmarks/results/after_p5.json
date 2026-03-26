@@ -1,0 +1,34 @@
+{
+  "parse_throughput": {},
+  "per_element_us": {},
+  "memory_ratio": {
+    "medium.xml_non_streaming": {
+      "size_mb": 0.594,
+      "peak_mb": 1.306,
+      "ratio": 2.2
+    },
+    "large.xml_non_streaming": {
+      "size_mb": 6.925,
+      "peak_mb": 17.332,
+      "ratio": 2.5
+    },
+    "wide.xml_non_streaming": {
+      "size_mb": 0.808,
+      "peak_mb": 3.656,
+      "ratio": 4.52
+    },
+    "medium.xml_streaming": {
+      "size_mb": 0.594,
+      "overhead_kb": 2.4
+    },
+    "large.xml_streaming": {
+      "size_mb": 6.925,
+      "overhead_kb": 2.0
+    },
+    "wide.xml_streaming": {
+      "size_mb": 0.808,
+      "overhead_kb": 2.3
+    }
+  },
+  "unparse_throughput": {}
+}
