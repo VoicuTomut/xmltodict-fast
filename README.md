@@ -1,4 +1,4 @@
-# xmltodict-rs
+# xmltodict-fast
 
 **xmltodict** — now with a Rust acceleration layer. Drop-in replacement: same API, same behaviour, dramatically faster.
 

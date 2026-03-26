@@ -3,7 +3,7 @@ requires = ["maturin>=1.4,<2"]
 build-backend = "maturin"
 
 [project]
-name = "xmltodict-rs"
+name = "xmltodict-fast"
 version = "1.0.0"
 description = "Rust-accelerated XML↔dict library — drop-in replacement for xmltodict"
 readme = "README.md"
@@ -38,8 +38,8 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/voicutomut/xmltodict-rs"
-Repository = "https://github.com/voicutomut/xmltodict-rs"
+Homepage = "https://github.com/voicutomut/xmltodict-fast"
+Repository = "https://github.com/voicutomut/xmltodict-fast"
 "Original project" = "https://github.com/martinblech/xmltodict"
 
 [tool.maturin]
