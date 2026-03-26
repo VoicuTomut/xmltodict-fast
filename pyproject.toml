@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=77.0.3"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.4,<2"]
+build-backend = "maturin"
 
 [project]
 name = "xmltodict"
@@ -35,5 +35,7 @@ test = [
 [project.urls]
 Homepage = "https://github.com/martinblech/xmltodict"
 
-[tool.setuptools]
-py-modules = ["xmltodict"]
+[tool.maturin]
+python-source = "python"
+module-name = "xmltodict._xmltodict_rs"
+features = ["pyo3/extension-module"]

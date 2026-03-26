@@ -34,3 +34,11 @@ nosetests.xml
 
 #setuptools MANIFEST
 MANIFEST
+
+# Rust build output (can exceed 500 MB)
+target/
+
+# Benchmark fixtures (large generated files — run generate_fixtures.py to recreate)
+benchmarks/fixtures/
+
+# Benchmark results ARE committed — do not add benchmarks/results/ here
