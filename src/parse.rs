@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use std::collections::HashMap;
 
 struct Frame {
     name: String,
@@ -9,12 +10,32 @@ struct Frame {
     data: Vec<String>,
 }
 
+// ── key interning ─────────────────────────────────────────────────────────────
+
+/// Per-parse-call cache: reuse the same PyString object for every occurrence of
+/// a given key string.  Cuts allocations dramatically on wide documents where
+/// the same element names / attribute keys repeat thousands of times.
+type KeyCache = HashMap<String, Py<PyString>>;
+
+fn intern_key(py: Python<'_>, cache: &mut KeyCache, key: &str) -> Py<PyString> {
+    if let Some(cached) = cache.get(key) {
+        cached.clone_ref(py)
+    } else {
+        let py_str = PyString::new(py, key).unbind();
+        cache.insert(key.to_string(), py_str.clone_ref(py));
+        py_str
+    }
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
 fn push_data(
     py: Python<'_>,
     item: Option<Py<PyDict>>,
     key: &str,
     data: Option<PyObject>,
     force_list: &Option<Vec<String>>,
+    key_cache: &mut KeyCache,
 ) -> PyResult<Py<PyDict>> {
     let d = match item {
         Some(d) => d,
@@ -27,6 +48,7 @@ fn push_data(
         None => false,
     };
 
+    // get_item with &str is fine — PyO3 compares via __eq__ against existing keys
     match dict.get_item(key)? {
         Some(existing) => {
             if let Ok(lst) = existing.downcast::<PyList>() {
@@ -34,16 +56,18 @@ fn push_data(
             } else {
                 let lst = PyList::new(py, [existing.clone()])?;
                 lst.append(data.unwrap_or_else(|| py.None()))?;
-                dict.set_item(key, lst)?;
+                let py_key = intern_key(py, key_cache, key);
+                dict.set_item(py_key.bind(py), lst)?;
             }
         }
         None => {
+            let py_key = intern_key(py, key_cache, key);
             if should_force {
                 let lst = PyList::empty(py);
                 lst.append(data.unwrap_or_else(|| py.None()))?;
-                dict.set_item(key, lst)?;
+                dict.set_item(py_key.bind(py), lst)?;
             } else {
-                dict.set_item(key, data.unwrap_or_else(|| py.None()))?;
+                dict.set_item(py_key.bind(py), data.unwrap_or_else(|| py.None()))?;
             }
         }
     }
@@ -54,6 +78,52 @@ fn xml_error(msg: impl std::fmt::Display) -> PyErr {
     // Raise as ValueError to match Python expat behaviour (tests catch Exception broadly).
     pyo3::exceptions::PyValueError::new_err(format!("XML parse error: {msg}"))
 }
+
+fn build_attrs_dict(
+    py: Python<'_>,
+    attributes: quick_xml::events::attributes::Attributes<'_>,
+    attr_prefix: &str,
+    reader: &Reader<&[u8]>,
+    key_cache: &mut KeyCache,
+) -> PyResult<Option<Py<PyDict>>> {
+    let decoder = reader.decoder();
+    let mut dict: Option<Py<PyDict>> = None;
+
+    for attr in attributes {
+        let attr = attr.map_err(xml_error)?;
+        // Use the FULL key name (preserves xmlns: prefix), not local_name()
+        let key_str = std::str::from_utf8(attr.key.as_ref())
+            .map_err(|_| xml_error("invalid UTF-8 in attribute name"))?;
+        let full_key = format!("{attr_prefix}{key_str}");
+        let val = attr.decode_and_unescape_value(decoder).map_err(xml_error)?;
+        let d = dict.get_or_insert_with(|| PyDict::new(py).unbind());
+        let py_key = intern_key(py, key_cache, &full_key);
+        d.bind(py).set_item(py_key.bind(py), val.as_ref())?;
+    }
+
+    Ok(dict)
+}
+
+fn decode_name(bytes: &[u8]) -> PyResult<String> {
+    std::str::from_utf8(bytes)
+        .map(|s| s.to_string())
+        .map_err(|_| xml_error("invalid UTF-8 in element name"))
+}
+
+fn join_data(parts: Vec<String>, sep: &str, strip: bool) -> Option<String> {
+    if parts.is_empty() {
+        return None;
+    }
+    let joined = parts.join(sep);
+    if strip {
+        let s = joined.trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
+    } else {
+        Some(joined)
+    }
+}
+
+// ── public entry point ────────────────────────────────────────────────────────
 
 #[pyfunction]
 #[pyo3(signature = (
@@ -105,6 +175,9 @@ pub fn parse(
     let mut root_count: usize = 0;
     let mut root_item: Option<Py<PyDict>> = None;
 
+    // Per-call key cache: element names and attribute keys repeat across elements.
+    let mut key_cache: KeyCache = HashMap::new();
+
     loop {
         let event = reader.read_event().map_err(xml_error)?;
 
@@ -113,7 +186,7 @@ pub fn parse(
                 let name = decode_name(e.name().as_ref())?;
 
                 let item: Option<Py<PyDict>> = if xml_attribs {
-                    build_attrs_dict(py, e.attributes(), attr_prefix, &reader)?
+                    build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?
                 } else {
                     // consume attributes to avoid errors
                     for attr in e.attributes() {
@@ -146,7 +219,8 @@ pub fn parse(
 
                 let value: Option<PyObject> = if let Some(ref d) = item {
                     if let Some(ref text) = data {
-                        d.bind(py).set_item(cdata_key, text)?;
+                        let ck = intern_key(py, &mut key_cache, cdata_key);
+                        d.bind(py).set_item(ck.bind(py), text)?;
                     }
                     Some(d.bind(py).clone().into())
                 } else {
@@ -155,7 +229,8 @@ pub fn parse(
 
                 if let Some(parent) = stack.last_mut() {
                     let parent_item = parent.item.take();
-                    let new_item = push_data(py, parent_item, &name, value, &force_list)?;
+                    let new_item =
+                        push_data(py, parent_item, &name, value, &force_list, &mut key_cache)?;
                     parent.item = Some(new_item);
                 } else {
                     // Root element closed
@@ -189,7 +264,7 @@ pub fn parse(
                 let name = decode_name(e.name().as_ref())?;
 
                 let item: Option<Py<PyDict>> = if xml_attribs {
-                    build_attrs_dict(py, e.attributes(), attr_prefix, &reader)?
+                    build_attrs_dict(py, e.attributes(), attr_prefix, &reader, &mut key_cache)?
                 } else {
                     for attr in e.attributes() {
                         attr.map_err(xml_error)?;
@@ -201,7 +276,8 @@ pub fn parse(
 
                 if let Some(parent) = stack.last_mut() {
                     let parent_item = parent.item.take();
-                    let new_item = push_data(py, parent_item, &name, value, &force_list)?;
+                    let new_item =
+                        push_data(py, parent_item, &name, value, &force_list, &mut key_cache)?;
                     parent.item = Some(new_item);
                 } else {
                     root_count += 1;
@@ -247,48 +323,4 @@ pub fn parse(
         Some(d) => d.bind(py).clone().into(),
         None => py.None(),
     })
-}
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-fn decode_name(bytes: &[u8]) -> PyResult<String> {
-    std::str::from_utf8(bytes)
-        .map(|s| s.to_string())
-        .map_err(|_| xml_error("invalid UTF-8 in element name"))
-}
-
-fn join_data(parts: Vec<String>, sep: &str, strip: bool) -> Option<String> {
-    if parts.is_empty() {
-        return None;
-    }
-    let joined = parts.join(sep);
-    if strip {
-        let s = joined.trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
-    } else {
-        Some(joined)
-    }
-}
-
-fn build_attrs_dict(
-    py: Python<'_>,
-    attributes: quick_xml::events::attributes::Attributes<'_>,
-    attr_prefix: &str,
-    reader: &Reader<&[u8]>,
-) -> PyResult<Option<Py<PyDict>>> {
-    let decoder = reader.decoder();
-    let mut dict: Option<Py<PyDict>> = None;
-
-    for attr in attributes {
-        let attr = attr.map_err(xml_error)?;
-        // Use the FULL key name (preserves xmlns: prefix), not local_name()
-        let key_str = std::str::from_utf8(attr.key.as_ref())
-            .map_err(|_| xml_error("invalid UTF-8 in attribute name"))?;
-        let full_key = format!("{attr_prefix}{key_str}");
-        let val = attr.decode_and_unescape_value(decoder).map_err(xml_error)?;
-        let d = dict.get_or_insert_with(|| PyDict::new(py).unbind());
-        d.bind(py).set_item(&full_key, val.as_ref())?;
-    }
-
-    Ok(dict)
 }

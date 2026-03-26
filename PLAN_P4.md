@@ -1,6 +1,6 @@
 # Phase 4 Plan — PyString Key Interning in Rust parse()
 
-## Status: PLANNED (not started)
+## Status: DONE
 
 ## Problem
 
