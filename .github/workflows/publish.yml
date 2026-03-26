@@ -1,44 +1,78 @@
-name: Publish to PyPI
+name: Build & Publish
 
 on:
   release:
     types: [published]
   workflow_dispatch: {}
 
-permissions:
-  id-token: write
-  contents: write
-
 jobs:
-  build-and-publish:
-    name: Build and publish python package
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi-publish
-      url: https://pypi.org/p/xmltodict
+  build-wheels:
+    name: Wheels — ${{ matrix.platform.os }} / ${{ matrix.platform.target }}
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            target: x86_64
+          - os: ubuntu-latest
+            target: aarch64
+          - os: macos-13         # Intel runner
+            target: x86_64
+          - os: macos-latest     # Apple Silicon runner
+            target: aarch64
+          - os: windows-latest
+            target: x86_64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.12"
 
-      - name: Install build backend
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install build
-
-      - name: Build sdist and wheel
-        run: |
-          python -m build --sdist --wheel --outdir dist/
-
-      - name: Upload sdist and wheel as release assets
-        uses: softprops/action-gh-release@v2
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
         with:
-          files: dist/*
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: "true"
+          manylinux: auto
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: actions/upload-artifact@v4
         with:
-          print-hash: true
+          name: wheels-${{ matrix.platform.os }}-${{ matrix.platform.target }}
+          path: dist
+
+  build-sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [build-wheels, build-sdist]
+    environment:
+      name: pypi
+      url: https://pypi.org/p/xmltodict-fast
+    permissions:
+      id-token: write   # trusted publishing — no token needed
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Publish
+        uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --non-interactive --skip-existing wheels-*/*
