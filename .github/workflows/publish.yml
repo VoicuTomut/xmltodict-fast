@@ -16,8 +16,6 @@ jobs:
             target: x86_64
           - os: ubuntu-latest
             target: aarch64
-          - os: macos-13         # Intel runner
-            target: x86_64
           - os: macos-latest     # Apple Silicon runner
             target: aarch64
           - os: windows-latest
