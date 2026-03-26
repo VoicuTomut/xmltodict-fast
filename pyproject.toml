@@ -3,9 +3,9 @@ requires = ["maturin>=1.4,<2"]
 build-backend = "maturin"
 
 [project]
-name = "xmltodict"
-version = "1.0.4"
-description = "Makes working with XML feel like you are working with JSON"
+name = "xmltodict-rs"
+version = "1.0.0"
+description = "Rust-accelerated XML↔dict library — drop-in replacement for xmltodict"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
@@ -14,6 +14,7 @@ authors = [
     { name = "Martin Blech" },
     { name = "Andrei Voicu Tomuț" },
 ]
+keywords = ["xml", "json", "dict", "xmltodict", "rust", "fast"]
 classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -26,6 +27,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Rust",
     "Topic :: Text Processing :: Markup :: XML",
 ]
 
@@ -36,7 +38,9 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/martinblech/xmltodict"
+Homepage = "https://github.com/voicutomut/xmltodict-rs"
+Repository = "https://github.com/voicutomut/xmltodict-rs"
+"Original project" = "https://github.com/martinblech/xmltodict"
 
 [tool.maturin]
 python-source = "python"
