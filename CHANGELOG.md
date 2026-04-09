@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/VoicuTomut/xmltodict-fast/compare/v1.1.0...v1.1.1) (2026-04-09)
+
+
+### Bug Fixes
+
+* **bench:** re-run benchmarks with proper subprocess isolation ([0c4e778](https://github.com/VoicuTomut/xmltodict-fast/commit/0c4e7782b0123638391120c0f48762a0f29ad23a))
+* **docs:** remove unverifiable streaming/memory claims ([045f405](https://github.com/VoicuTomut/xmltodict-fast/commit/045f4055d430267f3b750df0b617262c4d3986d1))
+
 ## [1.0.4](https://github.com/martinblech/xmltodict/compare/v1.0.3...v1.0.4) (2026-02-22)
 
 

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "xmltodict-fast"
-version = "1.1.0"
+version = "1.1.1"
 description = "Rust-accelerated XML↔dict library — drop-in replacement for xmltodict"
 readme = "README.md"
 requires-python = ">=3.9"
