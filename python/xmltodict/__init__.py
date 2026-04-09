@@ -67,6 +67,14 @@ def parse(xml_input, encoding=None, expat=None, process_namespaces=False,
         **kwargs,
     )
 
+    # Materialise file-like objects into bytes so they can be routed to the
+    # Rust backend (which requires a contiguous buffer).  Generators are left
+    # as-is — they are processed incrementally by the Python SAX path.
+    if hasattr(xml_input, 'read'):
+        xml_input = xml_input.read()
+        if isinstance(xml_input, str):
+            xml_input = xml_input.encode(encoding or 'utf-8')
+
     if _use_rust_parse(xml_input, routing):
         if isinstance(xml_input, str):
             raw = xml_input.encode('utf-8')

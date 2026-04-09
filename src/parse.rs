@@ -10,7 +10,25 @@ struct Frame {
     data: Vec<String>,
 }
 
-// ── key interning ─────────────────────────────────────────────────────────────
+// ── name interning (Rust-side) ───────────────────────────────────────────────
+
+/// Rust-side element name cache: raw XML bytes → owned String.
+/// Each unique element name is decoded and allocated once; subsequent
+/// occurrences return a cheap clone.
+type NameCache = HashMap<Vec<u8>, String>;
+
+fn decode_name_cached(bytes: &[u8], cache: &mut NameCache) -> PyResult<String> {
+    if let Some(cached) = cache.get(bytes) {
+        return Ok(cached.clone());
+    }
+    let name = std::str::from_utf8(bytes)
+        .map_err(|_| xml_error("invalid UTF-8 in element name"))?
+        .to_string();
+    cache.insert(bytes.to_vec(), name.clone());
+    Ok(name)
+}
+
+// ── key interning (Python-side) ──────────────────────────────────────────────
 
 /// Per-parse-call cache: reuse the same PyString object for every occurrence of
 /// a given key string.  Cuts allocations dramatically on wide documents where
@@ -169,36 +187,54 @@ fn build_raw_attrs_dict(
 fn build_callback_path(
     py: Python<'_>,
     path: &[(String, Option<Py<PyDict>>)],
+    key_cache: &mut KeyCache,
 ) -> PyResult<Py<PyList>> {
     let list = PyList::empty(py);
     for (name, raw_attrs) in path {
-        let name_obj = PyString::new(py, name);
+        let name_obj = intern_key(py, key_cache, name);
         let attrs_obj: Bound<'_, PyAny> = match raw_attrs {
             Some(d) => d.bind(py).clone().into_any(),
             None => py.None().into_bound(py),
         };
-        let tup = PyTuple::new(py, [name_obj.into_any(), attrs_obj])?;
+        let tup = PyTuple::new(py, [name_obj.into_bound(py).into_any(), attrs_obj])?;
         list.append(tup)?;
     }
     Ok(list.unbind())
 }
 
-fn decode_name(bytes: &[u8]) -> PyResult<String> {
-    std::str::from_utf8(bytes)
-        .map(|s| s.to_string())
-        .map_err(|_| xml_error("invalid UTF-8 in element name"))
-}
-
 fn join_data(parts: Vec<String>, sep: &str, strip: bool) -> Option<String> {
-    if parts.is_empty() {
-        return None;
-    }
-    let joined = parts.join(sep);
-    if strip {
-        let s = joined.trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
-    } else {
-        Some(joined)
+    match parts.len() {
+        0 => None,
+        1 => {
+            let s = parts.into_iter().next().unwrap();
+            if strip {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if trimmed.len() == s.len() {
+                    Some(s)
+                } else {
+                    Some(trimmed.to_string())
+                }
+            } else {
+                Some(s)
+            }
+        }
+        _ => {
+            let joined = parts.join(sep);
+            if strip {
+                let trimmed = joined.trim();
+                if trimmed.is_empty() {
+                    None
+                } else if trimmed.len() == joined.len() {
+                    Some(joined)
+                } else {
+                    Some(trimmed.to_string())
+                }
+            } else {
+                Some(joined)
+            }
+        }
     }
 }
 
@@ -264,6 +300,9 @@ pub fn parse(
     let mut root_count: usize = 0;
     let mut root_item: Option<Py<PyDict>> = None;
 
+    // Per-call name cache (Rust-side): avoids re-decoding + re-allocating
+    // element names that repeat across the document.
+    let mut name_cache: NameCache = HashMap::new();
     // Per-call key cache: element names and attribute keys repeat across elements.
     let mut key_cache: KeyCache = HashMap::new();
     // Per-call value cache: short, repeated values (e.g. enum-like attrs).
@@ -285,7 +324,7 @@ pub fn parse(
 
         match event {
             Event::Start(ref e) => {
-                let name = decode_name(e.name().as_ref())?;
+                let name = decode_name_cached(e.name().as_ref(), &mut name_cache)?;
 
                 // When streaming: build raw (unprefixed) attrs for the path entry,
                 // then build prefixed attrs for the item dict.
@@ -366,7 +405,7 @@ pub fn parse(
 
                 if streaming && depth == item_depth {
                     // Fire the streaming callback instead of attaching to parent
-                    let path_list = build_callback_path(py, &stream_path)?;
+                    let path_list = build_callback_path(py, &stream_path, &mut key_cache)?;
                     if let Some(ref cb) = item_callback {
                         let item_val: PyObject = value.unwrap_or_else(|| py.None());
                         let result = cb.bind(py).call1((path_list, item_val))?;
@@ -422,7 +461,7 @@ pub fn parse(
             }
 
             Event::Empty(ref e) => {
-                let name = decode_name(e.name().as_ref())?;
+                let name = decode_name_cached(e.name().as_ref(), &mut name_cache)?;
                 // An empty element is conceptually at depth+1 relative to current depth
                 let effective_depth = depth + 1;
 
@@ -449,7 +488,7 @@ pub fn parse(
                 if streaming && effective_depth == item_depth {
                     // Temporarily push to path, fire callback, then pop
                     stream_path.push((name.clone(), path_raw_attrs));
-                    let path_list = build_callback_path(py, &stream_path)?;
+                    let path_list = build_callback_path(py, &stream_path, &mut key_cache)?;
                     stream_path.pop();
 
                     if let Some(ref cb) = item_callback {

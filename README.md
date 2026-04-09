@@ -44,7 +44,7 @@ The original `xmltodict` is a well-loved, zero-dependency library that converts 
 |------|----------|-----------|
 | `parse()` | Python + expat | Rust (quick-xml) |
 | `unparse()` | Python + XMLGenerator | Rust |
-| `parse(item_depth=N, item_callback=...)` | Python (streaming) | Rust (constant 2 KB overhead) |
+| `parse(item_depth=N, item_callback=...)` | Python (streaming) | Rust |
 
 If the Rust extension cannot be loaded (e.g., unsupported platform, PyPy), the library transparently falls back to the original Python implementation — no code changes needed.
 
@@ -52,51 +52,50 @@ If the Rust extension cannot be loaded (e.g., unsupported platform, PyPy), the l
 
 ## Benchmarks — Rust vs pure Python
 
-Measured on a modern laptop; median of 5 runs per fixture.
+Measured on Apple Silicon (M-series); best of 20 runs per fixture, fresh subprocess per measurement. Python 3.13.
 
 ### parse() throughput
 
 | Fixture | Pure Python | Rust | Speedup |
 |---------|-------------|------|---------|
-| small.xml (~1 KB) | 14 MB/s | 40 MB/s | **2.8×** |
-| medium.xml (~600 KB) | 40 MB/s | 93 MB/s | **2.3×** |
-| large.xml (~7 MB) | 28 MB/s | 76 MB/s | **2.7×** |
-| wide.xml (~800 KB, flat) | 26 MB/s | 64 MB/s | **2.5×** |
-| namespaced.xml (~300 KB) | 38 MB/s | 84 MB/s | **2.2×** |
+| small.xml (~1 KB) | 22 MB/s | 57 MB/s | **2.6×** |
+| medium.xml (~600 KB) | 42 MB/s | 96 MB/s | **2.3×** |
+| large.xml (~7 MB) | 27 MB/s | 78 MB/s | **2.8×** |
+| wide.xml (~800 KB, flat) | 26 MB/s | 67 MB/s | **2.5×** |
+| namespaced.xml (~300 KB) | 39 MB/s | 89 MB/s | **2.3×** |
+| deep.xml (~500 KB, 500 levels) | 495 MB/s | 194 MB/s | **0.4×** |
 
-### Per-element cost
-
-| N | Pure Python | Rust | Speedup |
-|---|-------------|------|---------|
-| 100 elements | 2.82 µs/elem | 1.31 µs/elem | **2.2×** |
-| 10 000 elements | 2.88 µs/elem | 1.07 µs/elem | **2.7×** |
-| 50 000 elements | 2.92 µs/elem | 1.10 µs/elem | **2.7×** |
-
-### Memory usage (non-streaming)
-
-| Fixture | Pure Python | Rust | Improvement |
-|---------|-------------|------|-------------|
-| medium.xml (~600 KB) | 4.1× input | 2.0× input | **51% less** |
-| large.xml (~7 MB) | 3.1× input | 1.9× input | **39% less** |
-| wide.xml (~800 KB) | 7.5× input | 4.0× input | **47% less** |
-
-### Streaming memory overhead (`item_depth=2, item_callback=noop`)
-
-| Fixture | Pure Python | Rust | Improvement |
-|---------|-------------|------|-------------|
-| medium.xml (~600 KB) | 1 149 KB | **2 KB** | **478×** |
-| large.xml (~7 MB) | 4 132 KB | **2 KB** | **2 066×** |
-| wide.xml (~800 KB) | 1 561 KB | **2 KB** | **678×** |
-
-Streaming overhead in Rust is constant regardless of file size. That is the whole point.
+> **Note on deep nesting:** The Rust path is slower on pathologically deep XML (500+ nesting levels) due to per-element PyO3 overhead. Python's expat handles this case in C with lower per-element cost. Most real-world XML has moderate nesting depth where Rust wins comfortably.
 
 ### unparse() throughput
 
 | Fixture | Pure Python | Rust | Speedup |
 |---------|-------------|------|---------|
-| medium.xml (~600 KB) | 34 MB/s | 237 MB/s | **7.0×** |
-| large.xml (~7 MB) | 22 MB/s | 181 MB/s | **8.1×** |
-| wide.xml (~800 KB) | 18 MB/s | 106 MB/s | **5.8×** |
+| medium.xml (~600 KB) | 34 MB/s | 277 MB/s | **8.2×** |
+| large.xml (~7 MB) | 22 MB/s | 185 MB/s | **8.4×** |
+| wide.xml (~800 KB) | 18 MB/s | 110 MB/s | **6.1×** |
+
+### When to use the Rust backend
+
+The Rust extension is used automatically when available. It provides the best speedup for:
+
+- **`unparse()` — always faster** (6–8× speedup on all inputs)
+- **`parse()` with typical XML** — 2.3–2.8× faster for documents with moderate nesting
+- **Streaming with file objects** — file-like inputs are read into memory and routed through Rust for ~2× faster throughput
+
+The Rust path falls back to Python automatically for:
+
+- Deeply nested XML (500+ levels) where expat's C-level SAX is faster
+- Features not yet implemented in Rust: `process_namespaces`, `process_comments`, `postprocessor`, callable `force_list`/`force_cdata`, non-default `dict_constructor`
+- Generator inputs (processed incrementally by Python's SAX parser)
+- PyPy or platforms without a pre-built wheel
+
+To force the pure-Python path:
+
+```python
+import xmltodict
+xmltodict._RUST_AVAILABLE = False   # must be set before any parse/unparse call
+```
 
 ---
 
@@ -107,13 +106,6 @@ pip install xmltodict
 ```
 
 The package ships pre-built wheels for Linux, macOS, and Windows (x86-64 and arm64). If no wheel matches your platform, pip falls back to building from source (requires a Rust toolchain: `rustup`).
-
-To force the pure-Python fallback:
-
-```python
-import xmltodict
-xmltodict._RUST_AVAILABLE = False   # must be set before any parse/unparse call
-```
 
 ---
 
@@ -134,8 +126,7 @@ xml = xmltodict.unparse(result, pretty=True)
 
 ## Streaming large files
 
-Use `item_depth` and `item_callback` to process huge XML files with constant memory.
-Memory overhead stays at **~2 KB** regardless of file size.
+Use `item_depth` and `item_callback` to process large XML files without building the full document tree in memory. Each item is emitted to the callback and discarded.
 
 ```python
 def handle_article(path, item):

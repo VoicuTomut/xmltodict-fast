@@ -61,11 +61,9 @@ class TestParseInputTypes:
     def test_bytesio_input(self):
         assert parse(BytesIO(b"<a>hello</a>")) == {"a": "hello"}
 
-    def test_stringio_input_raises(self):
-        # parse expects binary file-like objects; StringIO returns str from read()
-        # which expat's ParseFile rejects — document the actual behavior
-        with pytest.raises(TypeError):
-            parse(StringIO("<a>hello</a>"))
+    def test_stringio_input(self):
+        # StringIO.read() returns str, which the routing layer encodes to bytes
+        assert parse(StringIO("<a>hello</a>")) == {"a": "hello"}
 
     def test_generator_of_bytes_chunks(self):
         chunks = (c.encode() for c in ["<a>", "hel", "lo", "</a>"])
@@ -74,6 +72,35 @@ class TestParseInputTypes:
     def test_generator_of_string_chunks(self):
         chunks = (c for c in ["<a>", "hel", "lo", "</a>"])
         assert parse(chunks) == {"a": "hello"}
+
+
+# ---------------------------------------------------------------------------
+# parse – file objects and generators with streaming
+# ---------------------------------------------------------------------------
+
+class TestParseFileObjectStreaming:
+    def test_bytesio_streaming_with_callback(self):
+        xml = b"<root><item>1</item><item>2</item><item>3</item></root>"
+        items = []
+        def cb(path, item):
+            items.append(item)
+            return True
+        parse(BytesIO(xml), item_depth=2, item_callback=cb)
+        assert items == ["1", "2", "3"]
+
+    def test_stringio_streaming_with_callback(self):
+        xml = "<root><item>a</item><item>b</item></root>"
+        items = []
+        def cb(path, item):
+            items.append(item)
+            return True
+        parse(StringIO(xml), item_depth=2, item_callback=cb)
+        assert items == ["a", "b"]
+
+    def test_bytesio_with_force_list(self):
+        xml = b"<root><item>1</item></root>"
+        result = parse(BytesIO(xml), force_list=("item",))
+        assert result == {"root": {"item": ["1"]}}
 
 
 # ---------------------------------------------------------------------------
