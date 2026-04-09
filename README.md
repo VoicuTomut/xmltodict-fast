@@ -52,18 +52,18 @@ If the Rust extension cannot be loaded (e.g., unsupported platform, PyPy), the l
 
 ## Benchmarks — Rust vs pure Python
 
-Measured on Apple Silicon (M-series); best of 20 runs per fixture, fresh subprocess per measurement. Python 3.13.
+Measured on Apple Silicon (M-series); 20 fresh-subprocess runs per fixture, median reported. Python 3.13.
 
 ### parse() throughput
 
 | Fixture | Pure Python | Rust | Speedup |
 |---------|-------------|------|---------|
-| small.xml (~1 KB) | 22 MB/s | 57 MB/s | **2.6×** |
-| medium.xml (~600 KB) | 42 MB/s | 96 MB/s | **2.3×** |
-| large.xml (~7 MB) | 27 MB/s | 78 MB/s | **2.8×** |
-| wide.xml (~800 KB, flat) | 26 MB/s | 67 MB/s | **2.5×** |
-| namespaced.xml (~300 KB) | 39 MB/s | 89 MB/s | **2.3×** |
-| deep.xml (~500 KB, 500 levels) | 495 MB/s | 194 MB/s | **0.4×** |
+| small.xml (~1 KB) | 14 MB/s | 31 MB/s | **2.1×** |
+| medium.xml (~600 KB) | 40 MB/s | 90 MB/s | **2.2×** |
+| large.xml (~7 MB) | 27 MB/s | 73 MB/s | **2.8×** |
+| wide.xml (~800 KB, flat) | 24 MB/s | 60 MB/s | **2.4×** |
+| namespaced.xml (~300 KB) | 36 MB/s | 80 MB/s | **2.2×** |
+| deep.xml (~500 KB, 500 levels) | 444 MB/s | 177 MB/s | **0.4×** |
 
 > **Note on deep nesting:** The Rust path is slower on pathologically deep XML (500+ nesting levels) due to per-element PyO3 overhead. Python's expat handles this case in C with lower per-element cost. Most real-world XML has moderate nesting depth where Rust wins comfortably.
 
@@ -71,16 +71,16 @@ Measured on Apple Silicon (M-series); best of 20 runs per fixture, fresh subproc
 
 | Fixture | Pure Python | Rust | Speedup |
 |---------|-------------|------|---------|
-| medium.xml (~600 KB) | 34 MB/s | 277 MB/s | **8.2×** |
-| large.xml (~7 MB) | 22 MB/s | 185 MB/s | **8.4×** |
-| wide.xml (~800 KB) | 18 MB/s | 110 MB/s | **6.1×** |
+| medium.xml (~600 KB) | 31 MB/s | 224 MB/s | **7.2×** |
+| large.xml (~7 MB) | 21 MB/s | 166 MB/s | **8.0×** |
+| wide.xml (~800 KB) | 17 MB/s | 99 MB/s | **5.9×** |
 
 ### When to use the Rust backend
 
 The Rust extension is used automatically when available. It provides the best speedup for:
 
 - **`unparse()` — always faster** (6–8× speedup on all inputs)
-- **`parse()` with typical XML** — 2.3–2.8× faster for documents with moderate nesting
+- **`parse()` with typical XML** — 2.1–2.8× faster for documents with moderate nesting
 - **Streaming with file objects** — file-like inputs are read into memory and routed through Rust for ~2× faster throughput
 
 The Rust path falls back to Python automatically for:

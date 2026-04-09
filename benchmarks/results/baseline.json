@@ -2,35 +2,35 @@
   "parse_throughput": {
     "small.xml": {
       "size_mb": 0.0,
-      "throughput_mbs": 14.23
+      "throughput_mbs": 14.33
     },
     "medium.xml": {
       "size_mb": 0.594,
-      "throughput_mbs": 40.14
+      "throughput_mbs": 40.19
     },
     "large.xml": {
       "size_mb": 6.925,
-      "throughput_mbs": 27.73
+      "throughput_mbs": 26.52
     },
     "wide.xml": {
       "size_mb": 0.808,
-      "throughput_mbs": 26.12
+      "throughput_mbs": 24.47
     },
     "deep.xml": {
       "size_mb": 0.493,
-      "throughput_mbs": 477.53
+      "throughput_mbs": 444.47
     },
     "namespaced.xml": {
       "size_mb": 0.301,
-      "throughput_mbs": 38.35
+      "throughput_mbs": 36.05
     }
   },
   "per_element_us": {
-    "100": 2.8167,
-    "1000": 2.8454,
-    "5000": 2.8732,
-    "10000": 2.8791,
-    "50000": 2.9215
+    "100": 2.2133,
+    "1000": 2.0186,
+    "5000": 2.0051,
+    "10000": 2.0278,
+    "50000": 2.0651
   },
   "memory_ratio": {
     "medium.xml_non_streaming": {
@@ -40,7 +40,7 @@
     },
     "large.xml_non_streaming": {
       "size_mb": 6.925,
-      "peak_mb": 21.479,
+      "peak_mb": 21.478,
       "ratio": 3.1
     },
     "wide.xml_non_streaming": {
@@ -50,29 +50,29 @@
     },
     "medium.xml_streaming": {
       "size_mb": 0.594,
-      "overhead_kb": 1148.9
+      "overhead_kb": 1149.0
     },
     "large.xml_streaming": {
       "size_mb": 6.925,
-      "overhead_kb": 4132.1
+      "overhead_kb": 4132.2
     },
     "wide.xml_streaming": {
       "size_mb": 0.808,
-      "overhead_kb": 1560.7
+      "overhead_kb": 1560.8
     }
   },
   "unparse_throughput": {
     "medium.xml": {
       "output_mb": 0.525,
-      "throughput_mbs": 33.87
+      "throughput_mbs": 31.28
     },
     "large.xml": {
-      "output_mb": 5.743,
-      "throughput_mbs": 22.37
+      "output_mb": 5.742,
+      "throughput_mbs": 20.75
     },
     "wide.xml": {
       "output_mb": 0.779,
-      "throughput_mbs": 18.18
+      "throughput_mbs": 16.67
     }
   }
 }
