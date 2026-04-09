@@ -81,7 +81,6 @@ The Rust extension is used automatically when available. It provides the best sp
 
 - **`unparse()` — always faster** (6–8× speedup on all inputs)
 - **`parse()` with typical XML** — 2.1–2.8× faster for documents with moderate nesting
-- **Streaming with file objects** — file-like inputs are read into memory and routed through Rust for ~2× faster throughput
 
 The Rust path falls back to Python automatically for:
 

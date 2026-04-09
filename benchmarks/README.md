@@ -208,5 +208,9 @@ and memory ratio. Unparse throughput is supporting evidence.
   Actions runner.
 - `tracemalloc` adds ~2–5% overhead to timed memory runs. Acceptable for
   relative comparisons; do not use for absolute latency numbers.
+- **Important:** `tracemalloc` only tracks CPython-managed allocations. Memory
+  allocated by the Rust extension (via Rust's allocator) is invisible to
+  `tracemalloc`. The memory benchmarks are only reliable for comparing
+  pure-Python runs. Do not use Rust memory_ratio numbers for public claims.
 - Use `run_isolated.py` for publication-quality numbers. The original `run.py`
   is still available for quick in-process checks (5 repeats, single process).
