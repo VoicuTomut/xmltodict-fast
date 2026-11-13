@@ -88,19 +88,19 @@ fn py_to_str(py: Python<'_>, v: &Bound<'_, PyAny>) -> PyResult<String> {
         let b: bool = v.extract()?;
         return Ok(if b { "true".to_string() } else { "false".to_string() });
     }
-    if let Ok(s) = v.downcast::<PyString>() {
+    if let Ok(s) = v.cast::<PyString>() {
         return Ok(s.to_string_lossy().into_owned());
     }
-    if let Ok(b) = v.downcast::<PyBytes>() {
+    if let Ok(b) = v.cast::<PyBytes>() {
         return Ok(String::from_utf8_lossy(b.as_bytes()).into_owned());
     }
-    if let Ok(b) = v.downcast::<PyByteArray>() {
+    if let Ok(b) = v.cast::<PyByteArray>() {
         return Ok(String::from_utf8_lossy(&b.to_vec()).into_owned());
     }
     // memoryview: call .tobytes() to get raw bytes, then decode as UTF-8
     if v.is_instance_of::<PyMemoryView>() {
         let raw = v.call_method0(pyo3::intern!(py, "tobytes"))?;
-        let bytes = raw.downcast::<PyBytes>()?;
+        let bytes = raw.cast::<PyBytes>()?;
         return Ok(String::from_utf8_lossy(bytes.as_bytes()).into_owned());
     }
     // fall through: call Python str()
@@ -145,7 +145,7 @@ fn emit_comment(
     opts: &Opts,
 ) -> PyResult<()> {
     // Value is either a single item or a list of items
-    let items: Vec<Bound<'_, PyAny>> = if let Ok(lst) = value.downcast::<PyList>() {
+    let items: Vec<Bound<'_, PyAny>> = if let Ok(lst) = value.cast::<PyList>() {
         lst.iter().collect()
     } else {
         vec![value.clone()]
@@ -180,7 +180,7 @@ fn process_dict(
 ) -> PyResult<()> {
     for (dk, dv) in d.iter() {
         // Key → string
-        let dk_str: String = if let Ok(s) = dk.downcast::<PyString>() {
+        let dk_str: String = if let Ok(s) = dk.cast::<PyString>() {
             s.to_string_lossy().into_owned()
         } else {
             // Non-string key: convert via str(), then validate (may raise ValueError)
@@ -201,7 +201,7 @@ fn process_dict(
         if let Some(attr_name) = dk_str.strip_prefix(opts.attr_prefix.as_str()) {
             // Special case: @xmlns with a dict value → xmlns:prefix= attributes
             if attr_name == "xmlns" && dv.is_instance_of::<PyDict>() {
-                let xmlns_dict = dv.downcast::<PyDict>()?;
+                let xmlns_dict = dv.cast::<PyDict>()?;
                 for (k, v) in xmlns_dict.iter() {
                     let prefix = k.str()?.to_string_lossy().into_owned();
                     validate_name(&prefix, "attribute")?;
@@ -232,7 +232,7 @@ fn process_dict(
 
         // Child element — skip empty lists (preserves Python _emit behaviour)
         let is_empty_list = dv
-            .downcast::<PyList>()
+            .cast::<PyList>()
             .map(|l| l.is_empty())
             .unwrap_or(false);
         if !is_empty_list {
@@ -257,9 +257,9 @@ fn emit_single_value(
 
     if v.is_none() {
         // empty element
-    } else if let Ok(d) = v.downcast::<PyDict>() {
+    } else if let Ok(d) = v.cast::<PyDict>() {
         process_dict(py, d, opts, &mut cdata, &mut attrs, &mut children)?;
-    } else if let Ok(s) = v.downcast::<PyString>() {
+    } else if let Ok(s) = v.cast::<PyString>() {
         cdata = Some(s.to_string_lossy().into_owned());
     } else {
         // Non-string scalar (int, float, bool, bytes, …) → convert to string → cdata
@@ -447,7 +447,7 @@ pub fn unparse(
     let mut seen_root = false;
 
     for (key, value) in input_dict.iter() {
-        let key_str: String = if let Ok(s) = key.downcast::<PyString>() {
+        let key_str: String = if let Ok(s) = key.cast::<PyString>() {
             s.to_string_lossy().into_owned()
         } else {
             key.str()?.to_string_lossy().into_owned()

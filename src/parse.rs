@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString, PyTuple};
 use quick_xml::events::Event;
-use quick_xml::Reader;
+use quick_xml::{Reader, XmlVersion};
 use std::collections::HashMap;
 
 struct Frame {
@@ -77,7 +77,7 @@ fn push_data(
     py: Python<'_>,
     item: Option<Py<PyDict>>,
     key: &str,
-    data: Option<PyObject>,
+    data: Option<Py<PyAny>>,
     force_list: &Option<Vec<String>>,
     key_cache: &mut KeyCache,
 ) -> PyResult<Py<PyDict>> {
@@ -95,7 +95,7 @@ fn push_data(
     // get_item with &str is fine — PyO3 compares via __eq__ against existing keys
     match dict.get_item(key)? {
         Some(existing) => {
-            if let Ok(lst) = existing.downcast::<PyList>() {
+            if let Ok(lst) = existing.cast::<PyList>() {
                 lst.append(data.unwrap_or_else(|| py.None()))?;
             } else {
                 let lst = PyList::new(py, [existing.clone()])?;
@@ -141,10 +141,10 @@ fn build_attrs_dict(
         let key_str = std::str::from_utf8(attr.key.as_ref())
             .map_err(|_| xml_error("invalid UTF-8 in attribute name"))?;
         let full_key = format!("{attr_prefix}{key_str}");
-        let val = attr.decode_and_unescape_value(decoder).map_err(xml_error)?;
+        let val = attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder).map_err(xml_error)?;
         let d = dict.get_or_insert_with(|| PyDict::new(py).unbind());
         let py_key = intern_key(py, key_cache, &full_key);
-        let val_py: PyObject = if intern_values {
+        let val_py: Py<PyAny> = if intern_values {
             if let Some(s) = try_intern_value(py, value_cache, val.as_ref()) {
                 s.into_bound(py).into()
             } else {
@@ -174,7 +174,7 @@ fn build_raw_attrs_dict(
         let attr = attr.map_err(xml_error)?;
         let key_str = std::str::from_utf8(attr.key.as_ref())
             .map_err(|_| xml_error("invalid UTF-8 in attribute name"))?;
-        let val = attr.decode_and_unescape_value(decoder).map_err(xml_error)?;
+        let val = attr.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder).map_err(xml_error)?;
         let d = dict.get_or_insert_with(|| PyDict::new(py).unbind());
         d.bind(py).set_item(key_str, val.as_ref())?;
     }
@@ -267,11 +267,11 @@ pub fn parse(
     disable_entities: bool,
     item_depth: usize,
     item_callback: Option<Py<PyAny>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     // Accept bytes / bytearray / str
     let xml_bytes: Vec<u8> = if let Ok(b) = xml_input.extract::<Vec<u8>>() {
         b
-    } else if let Ok(s) = xml_input.downcast::<PyString>() {
+    } else if let Ok(s) = xml_input.cast::<PyString>() {
         s.to_string_lossy().into_owned().into_bytes()
     } else {
         return Err(pyo3::exceptions::PyTypeError::new_err(
@@ -287,13 +287,9 @@ pub fn parse(
     }
 
     let mut reader = Reader::from_reader(xml_bytes.as_slice());
-    // When strip_whitespace is enabled, let quick-xml trim each text chunk and
-    // suppress empty-after-trim text events entirely.  This avoids generating
-    // Event::Text at all for pure-whitespace content (e.g. the 97% whitespace
-    // indentation in deep.xml), which is much cheaper than allocating and
-    // discarding strings ourselves.  When strip_whitespace is false we still
-    // need every byte, so we fall back to no trimming.
-    reader.config_mut().trim_text(strip_whitespace);
+    // References are separate events in quick-xml >= 0.38. Reassemble each
+    // text run before trimming/unescaping to preserve spaces and separators.
+    let mut text_run = String::new();
 
     let mut stack: Vec<Frame> = Vec::new();
     // Track completed root elements so we can raise on multiple roots.
@@ -321,6 +317,21 @@ pub fn parse(
 
     loop {
         let event = reader.read_event().map_err(xml_error)?;
+
+        if !matches!(event, Event::Text(_) | Event::GeneralRef(_)) && !text_run.is_empty() {
+            let raw = if strip_whitespace {
+                text_run.trim_matches([' ', '\t', '\r', '\n'])
+            } else {
+                &text_run
+            };
+            let text = quick_xml::escape::unescape(raw).map_err(xml_error)?;
+            if let Some(frame) = stack.last_mut() {
+                if !text.is_empty() {
+                    frame.data.push(text.into_owned());
+                }
+            }
+            text_run.clear();
+        }
 
         match event {
             Event::Start(ref e) => {
@@ -377,10 +388,10 @@ pub fn parse(
                     item
                 };
 
-                let value: Option<PyObject> = if let Some(ref d) = item {
+                let value: Option<Py<PyAny>> = if let Some(ref d) = item {
                     if let Some(ref text) = data {
                         let ck = intern_key(py, &mut key_cache, cdata_key);
-                        let text_py: PyObject = if intern_values {
+                        let text_py: Py<PyAny> = if intern_values {
                             if let Some(s) = try_intern_value(py, &mut value_cache, text) {
                                 s.into_bound(py).into()
                             } else {
@@ -407,7 +418,7 @@ pub fn parse(
                     // Fire the streaming callback instead of attaching to parent
                     let path_list = build_callback_path(py, &stream_path, &mut key_cache)?;
                     if let Some(ref cb) = item_callback {
-                        let item_val: PyObject = value.unwrap_or_else(|| py.None());
+                        let item_val: Py<PyAny> = value.unwrap_or_else(|| py.None());
                         let result = cb.bind(py).call1((path_list, item_val))?;
                         if !result.is_truthy()? {
                             return Err(crate::ParsingInterrupted::new_err(""));
@@ -440,15 +451,13 @@ pub fn parse(
             }
 
             Event::Text(e) => {
-                let text = e.unescape().map_err(xml_error)?;
-                if let Some(frame) = stack.last_mut() {
-                    // quick-xml already suppresses empty-after-trim text events when
-                    // trim_text(true) is set (strip_whitespace mode), so most whitespace
-                    // never reaches here.  Push any remaining non-empty chunk.
-                    if !text.is_empty() {
-                        frame.data.push(text.into_owned());
-                    }
-                }
+                text_run.push_str(&e.decode().map_err(xml_error)?);
+            }
+
+            Event::GeneralRef(e) => {
+                text_run.push('&');
+                text_run.push_str(&e.decode().map_err(xml_error)?);
+                text_run.push(';');
             }
 
             Event::CData(e) => {
@@ -483,7 +492,7 @@ pub fn parse(
                         (None, None)
                     };
 
-                let value: Option<PyObject> = item.map(|d| d.bind(py).clone().into());
+                let value: Option<Py<PyAny>> = item.map(|d| d.bind(py).clone().into());
 
                 if streaming && effective_depth == item_depth {
                     // Temporarily push to path, fire callback, then pop
@@ -492,7 +501,7 @@ pub fn parse(
                     stream_path.pop();
 
                     if let Some(ref cb) = item_callback {
-                        let item_val: PyObject = value.unwrap_or_else(|| py.None());
+                        let item_val: Py<PyAny> = value.unwrap_or_else(|| py.None());
                         let result = cb.bind(py).call1((path_list, item_val))?;
                         if !result.is_truthy()? {
                             return Err(crate::ParsingInterrupted::new_err(""));
